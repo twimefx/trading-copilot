@@ -10,6 +10,22 @@
 
 ---
 
+## ⚠️ PHASE 0 VALIDATION FINDING (2026-06-22) — shapes everything
+
+**40-window rolling backtest on real BTC/USDT (base Kronos-small, no fine-tuning):**
+- Final-direction accuracy: **35%** (worse than coin flip — NOT a directional oracle)
+- Per-hour direction: **51.4%** (≈ coin flip)
+- Price MAPE: **2.08%** (median 1.66%) — **genuinely accurate at price LEVEL / range**
+
+**Decision:** Kronos is repositioned as a **volatility / range / magnitude forecaster**, NOT a buy/sell signal source. It is good at "where price will likely sit (range)" and bad at "which way." Therefore:
+1. Direction comes from the **reasoning layer synthesizing multiple inputs** (technicals, funding/OI, sentiment, macro) — Kronos is ONE weighted voice, used for range/risk not direction.
+2. Kronos output feeds **risk sizing, stop/target placement, and the explainability engine** (its strength).
+3. Crypto fine-tuning is a Phase 2 EXPERIMENT (scripts in vendor/Kronos/finetune), not a product blocker.
+
+This validates the core thesis: **the moat is intelligence + risk + explainability, not raw signal accuracy.**
+
+---
+
 ## Guiding Principles (non-negotiable)
 
 1. **The moat is intelligence, not raw signal accuracy.** No model reliably predicts price profitably out-of-sample. We win on explainability, coaching, portfolio intelligence, and risk — so the business survives mediocre signal accuracy.
