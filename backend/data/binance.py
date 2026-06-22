@@ -11,6 +11,10 @@ import urllib.request
 import pandas as pd
 
 BINANCE_BASE = "https://api.binance.com/api/v3/klines"
+# Futures (perp) endpoints for funding rate + open interest — sentiment/positioning
+FUTURES_FUNDING = "https://fapi.binance.com/fapi/v1/fundingRate"
+FUTURES_OI = "https://fapi.binance.com/fapi/v1/openInterest"
+FUTURES_PREMIUM = "https://fapi.binance.com/fapi/v1/premiumIndex"
 
 # Binance returns max 1000 candles per request.
 _MAX_LIMIT = 1000
@@ -50,6 +54,39 @@ def fetch_klines(symbol: str = "BTCUSDT", interval: str = "1h", limit: int = 500
     return df
 
 
+def _get_json(url: str):
+    req = urllib.request.Request(url, headers={"User-Agent": "trading-copilot/0.1"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode())
+
+
+def fetch_funding_rate(symbol: str = "BTCUSDT") -> dict:
+    """Latest perp funding rate. Positive = longs pay shorts (bullish crowding)."""
+    try:
+        data = _get_json(f"{FUTURES_FUNDING}?symbol={symbol}&limit=1")
+        if not data:
+            return {"funding_rate": None, "available": False}
+        latest = data[-1]
+        return {
+            "funding_rate": float(latest["fundingRate"]),
+            "funding_rate_pct": round(float(latest["fundingRate"]) * 100, 4),
+            "available": True,
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"funding_rate": None, "available": False, "error": str(e)[:120]}
+
+
+def fetch_open_interest(symbol: str = "BTCUSDT") -> dict:
+    """Current open interest (total open perp contracts). Rising OI = new money."""
+    try:
+        data = _get_json(f"{FUTURES_OI}?symbol={symbol}")
+        return {"open_interest": float(data["openInterest"]), "available": True}
+    except Exception as e:  # noqa: BLE001
+        return {"open_interest": None, "available": False, "error": str(e)[:120]}
+
+
 if __name__ == "__main__":
     df = fetch_klines("BTCUSDT", "1h", 5)
     print(df.to_string(index=False))
+    print("Funding:", fetch_funding_rate("BTCUSDT"))
+    print("OI:", fetch_open_interest("BTCUSDT"))
