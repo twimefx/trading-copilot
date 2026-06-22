@@ -43,13 +43,14 @@ class ModelChoice:
 # --- Routing table -----------------------------------------------------------
 # Premium reasoning -> Claude. Cheap bulk -> DeepSeek. Mid -> GPT-class.
 ROUTING: dict[TaskClass, ModelChoice] = {
-    TaskClass.MARKET_COPILOT:    ModelChoice("anthropic", "claude-opus-4-20250514", 15.0, 75.0),
-    TaskClass.TRADE_EXPLANATION: ModelChoice("anthropic", "claude-opus-4-20250514", 15.0, 75.0),
-    TaskClass.STRATEGY_BUILDER:  ModelChoice("anthropic", "claude-opus-4-20250514", 15.0, 75.0),
-    TaskClass.AGENT_CONSENSUS:   ModelChoice("anthropic", "claude-opus-4-20250514", 15.0, 75.0),
-    TaskClass.SIGNAL_SUMMARY:    ModelChoice("anthropic", "claude-sonnet-4-20250514", 3.0, 15.0),
+    TaskClass.MARKET_COPILOT:    ModelChoice("anthropic", "claude-opus-4-8", 15.0, 75.0),
+    TaskClass.TRADE_EXPLANATION: ModelChoice("anthropic", "claude-opus-4-8", 15.0, 75.0),
+    TaskClass.STRATEGY_BUILDER:  ModelChoice("anthropic", "claude-opus-4-8", 15.0, 75.0),
+    TaskClass.AGENT_CONSENSUS:   ModelChoice("anthropic", "claude-opus-4-8", 15.0, 75.0),
+    TaskClass.SIGNAL_SUMMARY:    ModelChoice("anthropic", "claude-sonnet-4-6", 3.0, 15.0),
     TaskClass.MARKET_SCAN:       ModelChoice("deepseek", "deepseek-chat", 0.27, 1.10),
-    TaskClass.DEFAULT:           ModelChoice("anthropic", "claude-sonnet-4-20250514", 3.0, 15.0),
+    # Cheap default until DeepSeek is wired (Phase 1): Haiku.
+    TaskClass.DEFAULT:           ModelChoice("anthropic", "claude-haiku-4-5-20251001", 1.0, 5.0),
 }
 
 
