@@ -1,0 +1,39 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+*.log
+npm-debug.log*
+
+# Models / data (large — don't commit)
+*.safetensors
+*.bin
+*.ckpt
+models_cache/
+data/raw/
+*.csv
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Kronos clone (vendored separately)
+vendor/Kronos/

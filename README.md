@@ -1,0 +1,63 @@
+# AI Trading Copilot
+
+> AI intelligence terminal for retail traders. **Crypto + Forex** (MVP), stocks later.
+> The product is market *intelligence, explainability, and coaching* — signals are assistive, **not** guaranteed. Not financial advice.
+
+## Status: Phase 0 — Foundation ✅ (in progress)
+
+| Component | Status |
+|---|---|
+| Kronos forecasting (real BTC, end-to-end) | ✅ validated locally |
+| Binance OHLCV ingestion | ✅ working |
+| LLM model router (cost-routed, swappable) | ✅ skeleton (awaiting valid Claude key) |
+| Monorepo scaffold | ✅ |
+
+## Architecture
+
+```
+Market data (Binance/Oanda) → Kronos forecast → LLM reasoning (model-routed)
+   → Signal + Explainability engine → Dashboard + alerts
+   → Execution (opt-in, paper-first, LATER)
+```
+
+## Layout
+
+```
+backend/
+  ai/router.py        # provider-agnostic LLM router (Claude/GPT/DeepSeek by task class)
+  data/binance.py     # crypto OHLCV ingestion
+  signals/            # signal + explainability engine (Phase 1)
+  tests/
+frontend/             # Next.js + Tailwind + shadcn (Phase 1)
+infra/                # docker-compose (postgres/timescale, redis), deploy config
+spikes/               # throwaway validation (kronos_btc_spike.py)
+vendor/Kronos/        # cloned forecasting model (gitignored)
+.hermes/plans/        # build plans
+```
+
+## Dev setup
+
+```bash
+uv venv .venv --python 3.12 && source .venv/bin/activate
+uv pip install -r requirements.txt
+cp .env.example .env   # fill in ANTHROPIC_API_KEY etc.
+
+# Clone the forecasting model (gitignored)
+git clone --depth 1 https://github.com/shiyu-coder/Kronos.git vendor/Kronos
+
+# Validate the forecasting core
+python spikes/kronos_btc_spike.py
+```
+
+## LLM cost routing
+
+| Task | Model | Why |
+|---|---|---|
+| Market copilot, explanations, strategy, consensus | Claude Opus | best reasoning |
+| Signal summaries | Claude Sonnet | fast/cheaper |
+| Bulk market scans | DeepSeek | cheapest at scale |
+
+Per-call token cost is logged so spend is visible as we scale.
+
+## Honest disclaimer
+This software provides analysis and assistive signals. It does **not** guarantee profit and is **not** financial advice. Trading involves substantial risk of loss.
