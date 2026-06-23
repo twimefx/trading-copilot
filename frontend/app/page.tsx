@@ -4,7 +4,7 @@ import { useState } from "react";
 import TradingViewChart from "@/components/TradingViewChart";
 import Scanner from "@/components/Scanner";
 
-type Range = { low: number; high: number; source: string };
+type Range = { low: number | null; high: number | null; source: string };
 type Analysis = {
   lean?: string;
   conviction?: number;
@@ -30,6 +30,15 @@ function leanBg(lean?: string) {
   if (lean === "bullish") return "bg-bull/15 border-bull/40";
   if (lean === "bearish") return "bg-bear/15 border-bear/40";
   return "bg-neutral/10 border-neutral/30";
+}
+function convictionLabel(c?: number) {
+  if (c == null) return "";
+  if (c >= 67) return "High";
+  if (c >= 40) return "Moderate";
+  return "Low";
+}
+function hasRange(r?: Range) {
+  return !!r && r.low != null && r.high != null;
 }
 
 export default function Home() {
@@ -167,7 +176,18 @@ export default function Home() {
 
       {error && (
         <div className="bg-bear/15 border border-bear/40 rounded-xl p-4 text-bear text-sm mb-6">
-          {error} — is the backend running on :8011?
+          {error}. The analysis service may be busy — try again in a moment.
+        </div>
+      )}
+
+      {loading && !result && (
+        <div className="space-y-4 animate-pulse">
+          <div className="rounded-2xl border border-white/5 bg-panel p-6 h-44" />
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="rounded-2xl border border-white/5 bg-panel h-40" />
+            <div className="rounded-2xl border border-white/5 bg-panel h-40" />
+          </div>
+          <p className="text-center text-xs text-neutral">Opus is analyzing {symbol.replace("_", "/")}…</p>
         </div>
       )}
 
@@ -177,7 +197,7 @@ export default function Home() {
           <div className={`rounded-2xl border p-6 ${leanBg(result.lean)}`}>
             <div className="flex items-baseline justify-between">
               <div>
-                <span className="text-neutral text-sm">{symbol}</span>
+                <span className="text-neutral text-sm">{symbol.replace("_", "/")} · {interval}</span>
                 <div className={`text-3xl font-bold uppercase ${leanColor(result.lean)}`}>
                   {result.lean}
                 </div>
@@ -185,15 +205,24 @@ export default function Home() {
               <div className="text-right">
                 <div className="text-neutral text-xs">CONVICTION</div>
                 <div className="text-3xl font-bold">{result.conviction}<span className="text-neutral text-lg">/100</span></div>
+                <div className={`text-xs font-semibold ${leanColor(result.lean)}`}>{convictionLabel(result.conviction)}</div>
               </div>
             </div>
             <div className="mt-3 h-2 bg-black/30 rounded-full overflow-hidden">
               <div
-                className={`h-full ${result.lean === "bullish" ? "bg-bull" : result.lean === "bearish" ? "bg-bear" : "bg-neutral"}`}
+                className={`h-full transition-all duration-700 ${result.lean === "bullish" ? "bg-bull" : result.lean === "bearish" ? "bg-bear" : "bg-neutral"}`}
                 style={{ width: `${result.conviction ?? 0}%` }}
               />
             </div>
             <p className="mt-4 text-sm leading-relaxed text-gray-200">{result.summary}</p>
+
+            {/* Data coverage — transparent about what fed the call */}
+            <div className="mt-4 flex flex-wrap gap-2 pt-3 border-t border-white/10">
+              <span className="text-[11px] text-neutral/70 mr-1 self-center">INPUTS:</span>
+              <Coverage label="Technicals" on />
+              <Coverage label="Funding / OI" on={false} hint="geo-restricted on host" />
+              <Coverage label="Kronos range" on={hasRange(result.range_24h)} hint={hasRange(result.range_24h) ? undefined : "toggle on to include"} />
+            </div>
           </div>
 
           {/* Drivers + Risks */}
@@ -218,13 +247,20 @@ export default function Home() {
 
           {/* Range + invalidation */}
           <div className="grid md:grid-cols-2 gap-4">
-            {result.range_24h && (
+            {hasRange(result.range_24h) ? (
               <div className="bg-panel rounded-2xl border border-white/5 p-5">
                 <h3 className="text-accent font-semibold text-sm mb-2">24H RANGE (Kronos)</h3>
                 <div className="text-lg font-mono">
-                  ${result.range_24h.low?.toLocaleString()} – ${result.range_24h.high?.toLocaleString()}
+                  ${result.range_24h!.low?.toLocaleString()} – ${result.range_24h!.high?.toLocaleString()}
                 </div>
                 <p className="text-xs text-neutral mt-1">Volatility estimate, not a direction call.</p>
+              </div>
+            ) : (
+              <div className="bg-panel rounded-2xl border border-dashed border-white/10 p-5">
+                <h3 className="text-neutral font-semibold text-sm mb-2">24H RANGE (Kronos)</h3>
+                <p className="text-xs text-neutral/70">
+                  Not included in this analysis. Enable the <span className="text-accent">Kronos range</span> toggle above and re-run to add a forecasted volatility band for stop/target placement.
+                </p>
               </div>
             )}
             {result.suggested_invalidation && (
@@ -236,7 +272,8 @@ export default function Home() {
           </div>
 
           <div className="flex justify-between items-center text-xs text-neutral pt-2">
-            <span>cost: ${result.cost_usd}</span>
+            <span className="font-mono">analysis cost: ${result.cost_usd != null ? result.cost_usd.toFixed(4) : "—"}</span>
+            <span className="text-neutral/50">Opus reasoning</span>
           </div>
           <p className="text-xs text-neutral/60 border-t border-white/5 pt-3">{result.disclaimer}</p>
         </div>
@@ -244,5 +281,20 @@ export default function Home() {
       </>
       )}
     </main>
+  );
+}
+
+function Coverage({ label, on, hint }: { label: string; on: boolean; hint?: string }) {
+  return (
+    <span
+      title={hint}
+      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium ${
+        on ? "bg-bull/10 text-bull" : "bg-white/5 text-neutral/60"
+      }`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${on ? "bg-bull" : "bg-neutral/50"}`} />
+      {label}
+      {!on && hint && <span className="text-neutral/40">· {hint}</span>}
+    </span>
   );
 }
