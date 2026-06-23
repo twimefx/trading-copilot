@@ -3,6 +3,8 @@
 import { useState } from "react";
 import TradingViewChart from "@/components/TradingViewChart";
 import Scanner from "@/components/Scanner";
+import Journal from "@/components/Journal";
+import { saveEntry } from "@/lib/journal";
 
 type Range = { low: number | null; high: number | null; source: string };
 type Analysis = {
@@ -48,12 +50,15 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Analysis | null>(null);
-  const [view, setView] = useState<"copilot" | "scanner">("copilot");
+  const [view, setView] = useState<"copilot" | "scanner" | "journal">("copilot");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [journalRefresh, setJournalRefresh] = useState(0);
 
   async function analyze() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setSaveState("idle");
     try {
       const res = await fetch("/api/copilot", {
         method: "POST",
@@ -66,6 +71,23 @@ export default function Home() {
       setError(e.message || "Request failed");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function saveToJournal() {
+    if (!result) return;
+    setSaveState("saving");
+    try {
+      await saveEntry({
+        symbol,
+        interval,
+        analysis: { ...result, symbol, interval },
+        status: "idea",
+      });
+      setSaveState("saved");
+      setJournalRefresh((n) => n + 1);
+    } catch {
+      setSaveState("error");
     }
   }
 
@@ -82,7 +104,7 @@ export default function Home() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-white/10">
-        {(["copilot", "scanner"] as const).map((t) => (
+        {(["copilot", "scanner", "journal"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setView(t)}
@@ -90,10 +112,12 @@ export default function Home() {
               view === t ? "border-accent text-white" : "border-transparent text-neutral hover:text-white"
             }`}
           >
-            {t === "copilot" ? "AI Copilot" : "Scanner"}
+            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : "Journal"}
           </button>
         ))}
       </div>
+
+      {view === "journal" && <Journal refreshKey={journalRefresh} />}
 
       {view === "scanner" && (
         <Scanner
@@ -283,7 +307,18 @@ export default function Home() {
 
           <div className="flex justify-between items-center text-xs text-neutral pt-2">
             <span className="font-mono">analysis cost: ${result.cost_usd != null ? result.cost_usd.toFixed(4) : "—"}</span>
-            <span className="text-neutral/50">Opus reasoning</span>
+            <div className="flex items-center gap-3">
+              {saveState === "saved" && <span className="text-bull">✓ Saved to Journal</span>}
+              {saveState === "error" && <span className="text-bear">Save failed — retry</span>}
+              <button
+                onClick={saveToJournal}
+                disabled={saveState === "saving" || saveState === "saved"}
+                className="bg-panelhi hover:bg-white/10 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition"
+              >
+                {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : "+ Save to Journal"}
+              </button>
+              <span className="text-neutral/50">Opus reasoning</span>
+            </div>
           </div>
           <p className="text-xs text-neutral/60 border-t border-white/5 pt-3">{result.disclaimer}</p>
         </div>

@@ -55,6 +55,7 @@ Then set environment variables in the Railway dashboard (Variables tab):
 | `ANTHROPIC_API_KEY` | your sk-ant-… key |
 | `OANDA_API_TOKEN` | your Oanda token |
 | `OANDA_ENV` | `live` |
+| `JOURNAL_DB_PATH` | `/data/journal.db` (path on a Railway volume — see Trade Journal below) |
 | `FRONTEND_ORIGIN` | your Vercel URL (after step 2), e.g. `https://trading-copilot.vercel.app` |
 
 Railway gives you a public backend URL like `https://xxx.up.railway.app`.
@@ -126,6 +127,39 @@ gracefully to the ATR estimate — Kronos is never a hard dependency.
 > **Cost note:** CPU inference is ~30–90s/call and the service idles 24/7 on Railway.
 > For heavier use, host it on a cheap on-demand GPU box (RunPod/Lambda) and point
 > `KRONOS_SERVICE_URL` at it — no code change needed.
+
+---
+
+## Trade Journal (persistence)
+
+The journal lets users save Copilot analyses and track trade outcomes (status,
+entry/exit, P&L, notes) with a running win-rate. It's stored in **SQLite** —
+no extra service to provision. Entries are scoped by an `X-Owner-Id` header (a
+per-browser UUID); there's no auth yet, so each browser sees its own journal.
+
+**Make storage durable on Railway** (otherwise the DB resets on every redeploy):
+
+1. Railway → backend service → **Settings → Volumes → New Volume**.
+2. Mount path: `/data` (any persistent path is fine).
+3. Set the env var `JOURNAL_DB_PATH=/data/journal.db` so the DB lives on the volume.
+
+If `JOURNAL_DB_PATH` is unset it defaults to `journal.db` in the working dir —
+fine for local dev, but **ephemeral** on Railway without a volume.
+
+Endpoints (all require the `X-Owner-Id` header; the frontend sends it automatically):
+`POST /journal`, `GET /journal[?status=]`, `GET /journal/stats`,
+`GET|PATCH|DELETE /journal/{id}`.
+
+Verify after deploy:
+```bash
+curl -s -X POST <backend-url>/journal -H 'Content-Type: application/json' \
+  -H 'X-Owner-Id: smoke-test' -d '{"symbol":"BTCUSDT","status":"idea"}'
+curl -s <backend-url>/journal -H 'X-Owner-Id: smoke-test'   # should list it
+```
+
+> **Scaling note:** SQLite suits the single-instance MVP. When you scale to
+> multiple backend instances, swap the store for Postgres (Railway add-on) —
+> the `backend/journal/store.py` interface is small and deliberately portable.
 
 ---
 

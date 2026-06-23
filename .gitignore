@@ -29,6 +29,12 @@ models_cache/
 data/raw/
 *.csv
 
+# Trade Journal SQLite DB (dev; prod uses a Railway volume via JOURNAL_DB_PATH)
+journal.db
+*.db
+*.db-wal
+*.db-shm
+
 # OS / editor
 .DS_Store
 .idea/
