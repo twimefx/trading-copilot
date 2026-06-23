@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import TradingViewChart from "@/components/TradingViewChart";
+import Scanner from "@/components/Scanner";
 
 type Range = { low: number; high: number; source: string };
 type Analysis = {
@@ -38,6 +39,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Analysis | null>(null);
+  const [view, setView] = useState<"copilot" | "scanner">("copilot");
 
   async function analyze() {
     setLoading(true);
@@ -69,6 +71,33 @@ export default function Home() {
         </p>
       </header>
 
+      {/* Tabs */}
+      <div className="flex gap-2 mb-6 border-b border-white/10">
+        {(["copilot", "scanner"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setView(t)}
+            className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
+              view === t ? "border-accent text-white" : "border-transparent text-neutral hover:text-white"
+            }`}
+          >
+            {t === "copilot" ? "AI Copilot" : "Scanner"}
+          </button>
+        ))}
+      </div>
+
+      {view === "scanner" && (
+        <Scanner
+          onPick={(s) => {
+            setSymbol(s);
+            setView("copilot");
+            setResult(null);
+          }}
+        />
+      )}
+
+      {view === "copilot" && (
+      <>
       {/* Controls */}
       <div className="bg-panel rounded-2xl border border-white/5 p-5 mb-6">
         <div className="flex flex-wrap gap-2 mb-3">
@@ -211,6 +240,8 @@ export default function Home() {
           </div>
           <p className="text-xs text-neutral/60 border-t border-white/5 pt-3">{result.disclaimer}</p>
         </div>
+      )}
+      </>
       )}
     </main>
   );

@@ -18,6 +18,11 @@ class CopilotRequest(BaseModel):
     include_kronos: bool = True
 
 
+class ScanRequest(BaseModel):
+    symbols: list[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+    interval: str = "1h"
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "trading-copilot", "version": "0.1.0"}
@@ -29,3 +34,10 @@ def copilot(req: CopilotRequest):
     from backend.signals.copilot import analyze_symbol
     result = analyze_symbol(req.symbol, req.interval, include_kronos=req.include_kronos)
     return result
+
+
+@app.post("/scan")
+def scan(req: ScanRequest):
+    """Fast rule-based screen of a watchlist (no LLM). Ranked by conviction."""
+    from backend.signals.scanner import scan_watchlist
+    return {"results": scan_watchlist(req.symbols, req.interval)}
