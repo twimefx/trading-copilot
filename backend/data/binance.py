@@ -6,15 +6,25 @@ Forex (Oanda) ingestion lands in Phase 1.
 from __future__ import annotations
 
 import json
+import os
 import urllib.request
 
 import pandas as pd
 
-BINANCE_BASE = "https://api.binance.com/api/v3/klines"
-# Futures (perp) endpoints for funding rate + open interest — sentiment/positioning
-FUTURES_FUNDING = "https://fapi.binance.com/fapi/v1/fundingRate"
-FUTURES_OI = "https://fapi.binance.com/fapi/v1/openInterest"
-FUTURES_PREMIUM = "https://fapi.binance.com/fapi/v1/premiumIndex"
+# Spot klines: default to Binance's public data mirror (data-api.binance.vision),
+# which serves the identical schema and is NOT geo-blocked on many cloud IPs
+# (api.binance.com returns HTTP 451 from e.g. Railway). Override with BINANCE_BASE
+# if you proxy/region-shift. Trailing path kept identical to the spot API.
+BINANCE_BASE = os.environ.get(
+    "BINANCE_BASE", "https://data-api.binance.vision/api/v3/klines"
+)
+# Futures (perp) endpoints for funding rate + open interest — sentiment/positioning.
+# No public .vision mirror exists; these may 451 on blocked IPs but fail GRACEFULLY
+# (callers return {"available": False}), so the Copilot still works without them.
+_FUTURES_BASE = os.environ.get("BINANCE_FUTURES_BASE", "https://fapi.binance.com")
+FUTURES_FUNDING = f"{_FUTURES_BASE}/fapi/v1/fundingRate"
+FUTURES_OI = f"{_FUTURES_BASE}/fapi/v1/openInterest"
+FUTURES_PREMIUM = f"{_FUTURES_BASE}/fapi/v1/premiumIndex"
 
 # Binance returns max 1000 candles per request.
 _MAX_LIMIT = 1000
