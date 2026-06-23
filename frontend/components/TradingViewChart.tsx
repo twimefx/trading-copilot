@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, memo } from "react";
+import { useEffect, useRef } from "react";
 
 // Maps our interval values to TradingView's interval codes.
 const TV_INTERVAL: Record<string, string> = {
@@ -58,12 +58,16 @@ function TradingViewChart({ symbol, interval }: { symbol: string; interval: stri
   }, [symbol, interval]);
 
   return (
-    <div className="rounded-2xl overflow-hidden border border-white/5 bg-panel" style={{ height: 460 }}>
+    <div
+      key={`${symbol}-${interval}`}
+      className="rounded-2xl overflow-hidden border border-white/5 bg-panel"
+      style={{ height: 460 }}
+    >
       <div ref={container} className="tradingview-widget-container" style={{ height: "100%", width: "100%" }}>
-        <div className="tradingview-widget-container__widget" style={{ height: "100%", width: "100%" }} />
+        <div className="tradingview-widget-container__widget" style={{ height: "calc(100% - 32px)", width: "100%" }} />
       </div>
     </div>
   );
 }
 
-export default memo(TradingViewChart);
+export default TradingViewChart;
