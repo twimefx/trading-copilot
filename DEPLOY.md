@@ -7,6 +7,35 @@ Two pieces deploy separately:
 Kronos forecasting is **excluded from the production backend** (keeps it lean/cheap).
 The Copilot + Scanner work fully without it; the "Kronos range" toggle degrades gracefully.
 
+**Order of operations:** push to GitHub → deploy backend to Railway (generate domain)
+→ deploy frontend to Vercel (`BACKEND_URL` = Railway URL) → set Railway `FRONTEND_ORIGIN`
+= Vercel URL (closes the CORS loop) → open the Vercel URL and verify.
+
+> **Security:** never paste live tokens into chat/logs. The flows below use browser
+> login (no tokens). If a token ever leaks, rotate it immediately at the provider's
+> token settings page.
+
+---
+
+## 0. Push to GitHub
+
+The repo is committed locally (branch `master`). First-time push, browser login (no token):
+
+```bash
+# Install gh: macOS `brew install gh` · Linux `sudo apt install gh` (see cli.github.com)
+gh auth login                  # GitHub.com → HTTPS → Authenticate with browser
+cd /opt/data/projects/trading-copilot
+gh repo create trading-copilot --private --source=. --remote=origin --push
+```
+
+This creates `github.com/twimefx/trading-copilot` (private), wires `origin`, and pushes.
+
+Without `gh`: create an empty private repo in the web UI, then:
+```bash
+git remote add origin https://github.com/twimefx/trading-copilot.git
+git push -u origin master      # prompts for username + a PAT as the password
+```
+
 ---
 
 ## 1. Backend → Railway
@@ -28,7 +57,8 @@ Then set environment variables in the Railway dashboard (Variables tab):
 | `OANDA_ENV` | `live` |
 | `FRONTEND_ORIGIN` | your Vercel URL (after step 2), e.g. `https://trading-copilot.vercel.app` |
 
-Railway gives you a public backend URL like `https://xxx.up.railway.app`. Copy it.
+Railway gives you a public backend URL like `https://xxx.up.railway.app`.
+If you don't see a domain: **Settings → Networking → Generate Domain**. Copy it.
 
 Verify: `curl https://xxx.up.railway.app/health` → `{"status":"ok",...}`
 
