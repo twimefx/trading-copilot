@@ -17,7 +17,8 @@ type Analysis = {
   raw?: string;
 };
 
-const PRESETS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
+const CRYPTO_PRESETS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
+const FOREX_PRESETS = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "XAU_USD"];
 
 function leanColor(lean?: string) {
   if (lean === "bullish") return "text-bull";
@@ -71,7 +72,7 @@ export default function Home() {
       {/* Controls */}
       <div className="bg-panel rounded-2xl border border-white/5 p-5 mb-6">
         <div className="flex flex-wrap gap-2 mb-3">
-          {PRESETS.map((p) => (
+          {CRYPTO_PRESETS.map((p) => (
             <button
               key={p}
               onClick={() => setSymbol(p)}
@@ -80,6 +81,18 @@ export default function Home() {
               }`}
             >
               {p}
+            </button>
+          ))}
+          <span className="w-px bg-white/10 mx-1" />
+          {FOREX_PRESETS.map((p) => (
+            <button
+              key={p}
+              onClick={() => setSymbol(p)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
+              }`}
+            >
+              {p.replace("_", "/")}
             </button>
           ))}
         </div>

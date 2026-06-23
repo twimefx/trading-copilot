@@ -11,11 +11,16 @@ const TV_INTERVAL: Record<string, string> = {
 };
 
 // Maps a Binance-style symbol to a TradingView symbol.
-// Crypto USDT pairs -> BINANCE:<sym>. (Forex mapping added when Oanda lands.)
+// Crypto USDT pairs -> BINANCE:<sym>. Forex (EUR_USD / EURUSD) -> OANDA:EURUSD.
 function toTvSymbol(symbol: string): string {
   const s = symbol.toUpperCase();
   if (s.endsWith("USDT") || s.endsWith("USDC") || s.endsWith("BTC")) {
     return `BINANCE:${s}`;
+  }
+  // Forex / metals: strip separators -> OANDA:EURUSD
+  const cleaned = s.replace(/[_/-]/g, "");
+  if (cleaned.length === 6) {
+    return `OANDA:${cleaned}`;
   }
   return s;
 }
