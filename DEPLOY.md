@@ -95,9 +95,42 @@ Vercel gives you `https://trading-copilot.vercel.app`. Put that back into Railwa
 
 ---
 
+## 4. Kronos Range Service (optional — real volatility forecast)
+
+The Copilot works without this (it falls back to an honest ATR-based band). To enable
+the real Kronos model range, deploy the separate service in `services/kronos/` and point
+the backend at it. It's heavy (torch + model weights), so it runs as its OWN service.
+
+Deploy (Railway 2nd service, or any Docker host):
+```bash
+# Build context MUST be the repo root (the Dockerfile clones the gitignored Kronos vendor):
+docker build -f services/kronos/Dockerfile -t kronos-range .
+# On Railway: New Service in the SAME project → Deploy from repo →
+#   set Dockerfile path = services/kronos/Dockerfile, root = repo root.
+# Generate a domain (or use the private service URL).
+```
+Then on the MAIN backend service, set:
+
+| Variable | Value |
+|---|---|
+| `KRONOS_SERVICE_URL` | the Kronos service URL, e.g. `https://kronos-xxx.up.railway.app` |
+| `KRONOS_TIMEOUT` | (optional) seconds to wait, default 120 — CPU inference is slow |
+| `KRONOS_SAMPLE_COUNT` | (optional) forecast paths, default 5 |
+
+Verify: `curl <kronos-url>/health` → `{"status":"ok",...}`. Then a Copilot call with the
+Kronos toggle on returns `range_24h.source == "Kronos"` (instead of `"ATR estimate"`).
+
+If `KRONOS_SERVICE_URL` is unset or the service is unreachable, the backend degrades
+gracefully to the ATR estimate — Kronos is never a hard dependency.
+
+> **Cost note:** CPU inference is ~30–90s/call and the service idles 24/7 on Railway.
+> For heavier use, host it on a cheap on-demand GPU box (RunPod/Lambda) and point
+> `KRONOS_SERVICE_URL` at it — no code change needed.
+
+---
+
 ## Notes
-- **Kronos in prod:** if you later want forecasting live, deploy `spikes`/Kronos as a
-  separate worker on a GPU/large-CPU host and have the backend call it over HTTP.
 - **Secrets:** never commit `.env`. Set everything via the host dashboards.
-- **Cost:** Anthropic usage is the main variable cost (~$0.07/Copilot analysis with Opus).
-  Consider caching + a Sonnet tier for a cheaper plan as traffic grows.
+- **Cost:** Anthropic usage is the main variable cost (~$0.06/Copilot analysis with Opus).
+  The backend already has a TTL cache, per-IP rate limit, and a daily spend cap
+  (env-overridable: `COPILOT_CACHE_TTL`, `COPILOT_RATE_PER_HOUR`, `DAILY_SPEND_CAP_USD`).

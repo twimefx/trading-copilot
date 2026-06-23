@@ -8,6 +8,7 @@ This is the single source of truth the reasoning layer reasons over. Combining:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 
 from backend.data.providers import get_provider, asset_class
@@ -53,13 +54,53 @@ def build_market_context(
         open_interest=provider.fetch_open_interest(symbol),
     )
     if include_kronos:
-        try:
-            from backend.signals.kronos_range import forecast_range
-            ctx.kronos_range = forecast_range(df, pred_len=24, sample_count=3)
-        except Exception as e:  # noqa: BLE001
-            # Kronos (torch) may be absent in lean production builds — degrade gracefully.
-            ctx.kronos_range = {"available": False, "note": f"Kronos unavailable: {str(e)[:80]}"}
+        ctx.kronos_range = _fetch_kronos_range(df)
     return ctx
+
+
+def _fetch_kronos_range(df) -> dict:
+    """Get a Kronos range, preferring the remote service, then local torch, then degrade.
+
+    The lean production backend has NO torch, so the normal path is the HTTP service
+    at KRONOS_SERVICE_URL. If that's unset or unreachable, we degrade gracefully and
+    the copilot's _compute_range falls back to an honest ATR estimate.
+    """
+    url = os.environ.get("KRONOS_SERVICE_URL")
+    if url:
+        try:
+            import urllib.request
+
+            payload = {
+                "ohlcv": json.loads(df.to_json(orient="records", date_format="iso")),
+                "pred_len": 24,
+                "sample_count": int(os.environ.get("KRONOS_SAMPLE_COUNT", "5")),
+            }
+            data = json.dumps(payload).encode()
+            req = urllib.request.Request(
+                url.rstrip("/") + "/forecast",
+                data=data,
+                headers={"Content-Type": "application/json"},
+            )
+            timeout = float(os.environ.get("KRONOS_TIMEOUT", "120"))
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode())
+        except Exception as e:  # noqa: BLE001
+            return {"available": False, "note": f"Kronos service error: {str(e)[:80]}"}
+
+    # No remote service configured — try in-process (dev box with torch installed).
+    try:
+        from backend.signals.kronos_range import forecast_range
+        raw = forecast_range(df, pred_len=24, sample_count=3)
+        return {
+            "low": raw["expected_band_low"],
+            "high": raw["expected_band_high"],
+            "expected_close": raw["expected_close"],
+            "band_width_pct": raw["band_width_pct"],
+            "source": "Kronos",
+        }
+    except Exception as e:  # noqa: BLE001
+        # torch absent in lean build, or model load failed — degrade gracefully.
+        return {"available": False, "note": f"Kronos unavailable: {str(e)[:80]}"}
 
 
 if __name__ == "__main__":
