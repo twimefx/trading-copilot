@@ -42,7 +42,16 @@ class ScanRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "trading-copilot", "version": "0.1.0"}
+    # `anthropic_key_present` is a boolean only (never the value) — temporary
+    # deploy diagnostic to confirm the env var reached this container.
+    return {
+        "status": "ok",
+        "service": "trading-copilot",
+        "version": "0.1.0",
+        "anthropic_key_present": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "oanda_token_present": bool(os.environ.get("OANDA_API_TOKEN")),
+        "binance_base": os.environ.get("BINANCE_BASE", "default(mirror)"),
+    }
 
 
 @app.post("/copilot")
