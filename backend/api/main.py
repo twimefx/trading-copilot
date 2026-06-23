@@ -6,11 +6,14 @@ Endpoints:
 """
 from __future__ import annotations
 
+import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+logger = logging.getLogger("copilot.api")
 
 app = FastAPI(title="AI Trading Copilot", version="0.1.0")
 
@@ -46,8 +49,15 @@ def health():
 def copilot(req: CopilotRequest):
     """Run the AI Market Copilot for a symbol and return the structured analysis."""
     from backend.signals.copilot import analyze_symbol
-    result = analyze_symbol(req.symbol, req.interval, include_kronos=req.include_kronos)
-    return result
+    try:
+        return analyze_symbol(req.symbol, req.interval, include_kronos=req.include_kronos)
+    except RuntimeError as e:
+        # Config problems (e.g. ANTHROPIC_API_KEY not set) — surface clearly as 503.
+        logger.exception("copilot config error")
+        raise HTTPException(status_code=503, detail=f"Copilot unavailable: {e}") from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("copilot failed")
+        raise HTTPException(status_code=500, detail=f"Copilot error: {type(e).__name__}: {e}") from e
 
 
 @app.post("/scan")
