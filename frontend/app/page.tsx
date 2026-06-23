@@ -221,7 +221,11 @@ export default function Home() {
               <span className="text-[11px] text-neutral/70 mr-1 self-center">INPUTS:</span>
               <Coverage label="Technicals" on />
               <Coverage label="Funding / OI" on={false} hint="geo-restricted on host" />
-              <Coverage label="Kronos range" on={hasRange(result.range_24h)} hint={hasRange(result.range_24h) ? undefined : "toggle on to include"} />
+              <Coverage
+                label="Kronos range"
+                on={result.range_24h?.source === "Kronos"}
+                hint={result.range_24h?.source === "Kronos" ? undefined : "using ATR estimate"}
+              />
             </div>
           </div>
 
@@ -249,17 +253,23 @@ export default function Home() {
           <div className="grid md:grid-cols-2 gap-4">
             {hasRange(result.range_24h) ? (
               <div className="bg-panel rounded-2xl border border-white/5 p-5">
-                <h3 className="text-accent font-semibold text-sm mb-2">24H RANGE (Kronos)</h3>
+                <h3 className="text-accent font-semibold text-sm mb-2">
+                  24H RANGE <span className="text-neutral/60 font-normal">· {result.range_24h!.source}</span>
+                </h3>
                 <div className="text-lg font-mono">
                   ${result.range_24h!.low?.toLocaleString()} – ${result.range_24h!.high?.toLocaleString()}
                 </div>
-                <p className="text-xs text-neutral mt-1">Volatility estimate, not a direction call.</p>
+                <p className="text-xs text-neutral mt-1">
+                  {result.range_24h!.source === "Kronos"
+                    ? "Kronos volatility forecast — a likely band, not a direction call."
+                    : "ATR-based volatility estimate. Enable Kronos range for the model forecast."}
+                </p>
               </div>
             ) : (
               <div className="bg-panel rounded-2xl border border-dashed border-white/10 p-5">
-                <h3 className="text-neutral font-semibold text-sm mb-2">24H RANGE (Kronos)</h3>
+                <h3 className="text-neutral font-semibold text-sm mb-2">24H RANGE</h3>
                 <p className="text-xs text-neutral/70">
-                  Not included in this analysis. Enable the <span className="text-accent">Kronos range</span> toggle above and re-run to add a forecasted volatility band for stop/target placement.
+                  Volatility band unavailable for this analysis.
                 </p>
               </div>
             )}

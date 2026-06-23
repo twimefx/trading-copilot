@@ -21,17 +21,20 @@ DISCLAIMER = (
 SYSTEM_PROMPT = """You are an elite, brutally honest market analyst for a retail trading platform.
 
 You are given a structured MarketContext for one asset: technical indicators (RSI, MACD,
-EMAs, ATR, volume trend), perp funding rate, open interest, and a Kronos RANGE forecast.
+EMAs, ATR, volume trend), perp funding rate, open interest, and (when available) a Kronos
+RANGE forecast.
 
 CRITICAL RULES:
-- The Kronos forecast is a VOLATILITY/RANGE estimate only. It has NO directional skill
-  (validated: ~35% directional accuracy). Use it ONLY for the likely price band, stop/target
+- The Kronos forecast, WHEN PRESENT, is a VOLATILITY/RANGE estimate only. It has NO directional
+  skill (validated: ~35% directional accuracy). Use it ONLY for the likely price band, stop/target
   placement, and risk sizing. NEVER treat it as a buy/sell signal.
 - DIRECTION and conviction must come from YOUR synthesis of the technicals + positioning
   (funding/OI) + price structure. Weigh the evidence honestly.
 - Be transparent. Every claim ties to a specific data point. No black-box assertions.
 - Never guarantee profit. Express uncertainty honestly. If the picture is mixed, say so and
   lower conviction.
+- Do NOT invent a price range. The system computes the range deterministically and adds it
+  AFTER you respond. Do not output a range_24h field.
 
 Respond ONLY with valid JSON in exactly this shape:
 {
@@ -40,9 +43,34 @@ Respond ONLY with valid JSON in exactly this shape:
   "summary": "<2-3 sentence plain-English answer to 'what's happening and why'>",
   "drivers": ["<specific bullish/bearish driver tied to data>", ...],
   "risks": ["<what could invalidate this / key risk>", ...],
-  "range_24h": {"low": <num>, "high": <num>, "source": "Kronos"},
   "suggested_invalidation": "<price level or condition that would flip the thesis>"
 }"""
+
+
+def _compute_range(ctx: MarketContext) -> dict:
+    """Authoritative 24h range — NEVER LLM-invented.
+
+    Priority:
+      1. Real Kronos forecast if it actually ran (source "Kronos").
+      2. Honest ATR-based band from live indicators (source "ATR estimate").
+      3. Null band if we can't even compute ATR (source "unavailable").
+    """
+    kr = ctx.kronos_range
+    if isinstance(kr, dict) and kr.get("low") is not None and kr.get("high") is not None:
+        return {"low": kr["low"], "high": kr["high"], "source": "Kronos"}
+
+    ind = ctx.indicators or {}
+    close = ind.get("last_close")
+    atr = ind.get("atr_14")
+    if close is not None and atr is not None:
+        # ~24 1h-bars of ATR drift as a rough 1-sigma-ish band; honest heuristic, labeled as such.
+        span = atr * 4.0
+        return {
+            "low": round(close - span, 2),
+            "high": round(close + span, 2),
+            "source": "ATR estimate",
+        }
+    return {"low": None, "high": None, "source": "unavailable"}
 
 
 def analyze(ctx: MarketContext, router: AIRouter | None = None) -> dict:
@@ -71,6 +99,8 @@ def analyze(ctx: MarketContext, router: AIRouter | None = None) -> dict:
 
     result["disclaimer"] = DISCLAIMER
     result["cost_usd"] = round(router.cost_log.total_usd, 5)
+    # Range is authoritative/deterministic — never trust an LLM-invented band.
+    result["range_24h"] = _compute_range(ctx)
     return result
 
 
