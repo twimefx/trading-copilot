@@ -55,7 +55,7 @@ Then set environment variables in the Railway dashboard (Variables tab):
 | `ANTHROPIC_API_KEY` | your sk-ant-… key |
 | `OANDA_API_TOKEN` | your Oanda token |
 | `OANDA_ENV` | `live` |
-| `JOURNAL_DB_PATH` | `/data/journal.db` (path on a Railway volume — see Trade Journal below) |
+| `DATABASE_URL` | auto-injected by Railway when you add a Postgres database (see Trade Journal below) |
 | `FRONTEND_ORIGIN` | your Vercel URL (after step 2), e.g. `https://trading-copilot.vercel.app` |
 
 Railway gives you a public backend URL like `https://xxx.up.railway.app`.
@@ -133,33 +133,46 @@ gracefully to the ATR estimate — Kronos is never a hard dependency.
 ## Trade Journal (persistence)
 
 The journal lets users save Copilot analyses and track trade outcomes (status,
-entry/exit, P&L, notes) with a running win-rate. It's stored in **SQLite** —
-no extra service to provision. Entries are scoped by an `X-Owner-Id` header (a
-per-browser UUID); there's no auth yet, so each browser sees its own journal.
+entry/exit, P&L, notes) with a running win-rate. Entries are scoped by an
+`X-Owner-Id` header (a per-browser UUID); there's no auth yet, so each browser
+sees its own journal.
 
-**Make storage durable on Railway** (otherwise the DB resets on every redeploy):
+Storage auto-selects at runtime:
 
-1. Railway → backend service → **Settings → Volumes → New Volume**.
-2. Mount path: `/data` (any persistent path is fine).
-3. Set the env var `JOURNAL_DB_PATH=/data/journal.db` so the DB lives on the volume.
+- **`DATABASE_URL` set → Postgres** (durable, survives redeploys, multi-instance
+  safe). This is the prod path.
+- **`DATABASE_URL` unset → SQLite** file at `JOURNAL_DB_PATH` (default
+  `journal.db`). Zero-setup for local dev — but **ephemeral on Railway**, so
+  don't rely on it in prod.
 
-If `JOURNAL_DB_PATH` is unset it defaults to `journal.db` in the working dir —
-fine for local dev, but **ephemeral** on Railway without a volume.
+**Turn on durable storage — one click in Railway:**
+
+1. In your Railway project, click **+ New → Database → Add PostgreSQL**.
+2. That's it. Railway provisions the DB and **auto-injects `DATABASE_URL`** into
+   the project. The backend reads it on boot, switches to Postgres, and creates
+   the `journal_entries` table automatically (idempotent `init_db()`).
+3. Redeploy the backend if it doesn't pick up the new var automatically.
+
+No volume, no migration tool, no manual schema step. The `postgres`-vs-
+`postgresql` scheme difference Railway sometimes emits is normalized in code.
 
 Endpoints (all require the `X-Owner-Id` header; the frontend sends it automatically):
 `POST /journal`, `GET /journal[?status=]`, `GET /journal/stats`,
 `GET|PATCH|DELETE /journal/{id}`.
 
-Verify after deploy:
+Verify after adding Postgres:
 ```bash
 curl -s -X POST <backend-url>/journal -H 'Content-Type: application/json' \
   -H 'X-Owner-Id: smoke-test' -d '{"symbol":"BTCUSDT","status":"idea"}'
 curl -s <backend-url>/journal -H 'X-Owner-Id: smoke-test'   # should list it
+# Redeploy the backend, then list again — the entry SURVIVES (proves durability).
 ```
 
-> **Scaling note:** SQLite suits the single-instance MVP. When you scale to
-> multiple backend instances, swap the store for Postgres (Railway add-on) —
-> the `backend/journal/store.py` interface is small and deliberately portable.
+> **Driver note:** prod uses `psycopg[binary]` (prebuilt wheel — no system libpq
+> or compiler needed, installs clean on `python:3.12-slim`). The store interface
+> in `backend/journal/store.py` is small and dialect-agnostic; both the SQLite
+> and Postgres paths are covered by `backend/tests/test_journal.py` (the PG tests
+> spin up a real embedded Postgres via `pgserver` and skip if it's absent).
 
 ---
 

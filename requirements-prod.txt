@@ -8,3 +8,7 @@ anthropic~=0.111.0
 pandas~=2.2.2
 numpy~=2.5.0
 pydantic~=2.13.4
+# Trade Journal persistence. Postgres in prod (durable, survives redeploys) via
+# DATABASE_URL; falls back to stdlib sqlite3 when DATABASE_URL is unset (local dev).
+# psycopg[binary] ships a prebuilt wheel — no system libpq/compiler needed.
+psycopg[binary]~=3.2.0

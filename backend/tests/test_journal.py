@@ -149,3 +149,55 @@ def test_api_full_lifecycle(api):
 def test_api_update_missing_returns_404(api):
     r = api.patch("/journal/doesnotexist", json={"notes": "x"}, headers=H)
     assert r.status_code == 404
+
+
+# --- Postgres backend (real server) -----------------------------------------
+# Verifies the prod code path (psycopg + JSONB + "%s" placeholders) against a
+# genuine Postgres, using the self-contained `pgserver` wheel. Skips cleanly if
+# pgserver/psycopg aren't installed so the SQLite-only dev path stays green.
+
+@pytest.fixture(scope="module")
+def pg_uri():
+    pgserver = pytest.importorskip("pgserver")
+    pytest.importorskip("psycopg")
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="pgtest_journal_")
+    server = pgserver.get_server(tmp)
+    try:
+        yield server.get_uri()
+    finally:
+        server.cleanup()
+
+
+@pytest.fixture()
+def pg_store(pg_uri, monkeypatch):
+    """Journal store wired to a real Postgres for one test, with a clean table."""
+    import backend.journal.store as s
+    monkeypatch.setattr(s, "DATABASE_URL", pg_uri)
+    monkeypatch.setattr(s, "USE_PG", True)
+    s.init_db()
+    # Isolate each test: clear the table first.
+    with s._conn() as conn:
+        conn.cursor().execute("DELETE FROM journal_entries")
+    return s
+
+
+def test_pg_create_jsonb_roundtrip_and_isolation(pg_store):
+    s = pg_store
+    e = s.create_entry("ownerA", SAMPLE)
+    assert e["symbol"] == "BTCUSDT"
+    assert e["analysis"]["summary"] == "Momentum building."   # JSONB decoded to dict
+    assert e["range_24h"]["source"] == "ATR estimate"
+    assert s.get_entry("ownerB", e["id"]) is None              # owner isolation
+    assert len(s.list_entries("ownerA")) == 1
+
+
+def test_pg_update_stats_delete(pg_store):
+    s = pg_store
+    e = s.create_entry("ownerA", SAMPLE)
+    u = s.update_entry("ownerA", e["id"], {"status": "closed", "outcome": "win", "pnl": 900})
+    assert u["status"] == "closed" and u["outcome"] == "win"
+    st = s.stats("ownerA")
+    assert st["closed_trades"] == 1 and st["wins"] == 1 and st["total_pnl"] == 900.0
+    assert s.delete_entry("ownerA", e["id"]) is True
+    assert s.get_entry("ownerA", e["id"]) is None

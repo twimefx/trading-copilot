@@ -1,17 +1,22 @@
-"""Trade Journal persistence — stdlib sqlite3, zero new prod dependency.
+"""Trade Journal persistence — Postgres in prod, SQLite for local dev.
 
-Why SQLite: the MVP runs as a single Railway instance (same assumption as the
-in-memory guards). A file-backed SQLite DB on a persistent volume gives durable
-storage with no extra service to provision or pay for. The store interface is
-deliberately small so we can swap in Postgres when we scale horizontally.
+Backend is auto-selected at runtime:
+  * DATABASE_URL set  -> Postgres (via psycopg 3). Durable, survives redeploys,
+    safe across multiple instances. This is what Railway injects when you add a
+    Postgres database to the project.
+  * DATABASE_URL unset -> stdlib sqlite3 file at JOURNAL_DB_PATH (default
+    "journal.db"). Zero-setup for local dev and tests.
+
+The two dialects differ in only two mechanical ways, which we abstract:
+  1. Parameter placeholder: sqlite uses "?", Postgres uses "%s".
+  2. Connection construction + the analysis-blob column type (TEXT vs JSONB).
+
+All CRUD logic is shared. The store interface is deliberately small so callers
+never care which backend is live.
 
 Scoping: there's no auth yet, so entries are owned by a client-generated
-`owner_id` (a UUID the browser keeps in localStorage and sends as a header).
-This is honest about the current trust model and upgrades cleanly to real user
-IDs once an auth gate lands — `owner_id` just becomes the authenticated user id.
-
-Concurrency: SQLite with WAL mode + a short busy timeout handles the low write
-volume of a journal fine. Each call opens its own connection (thread-safe).
+`owner_id` (a UUID the browser keeps and sends as a header). This upgrades
+cleanly to authenticated user ids — owner_id just becomes the user id.
 """
 from __future__ import annotations
 
@@ -20,63 +25,107 @@ import os
 import sqlite3
 import time
 import uuid
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
-# Env-overridable so prod points at a persistent volume (e.g. /data/journal.db)
-# without a code change. Defaults to a local file for dev.
+# --- backend selection -------------------------------------------------------
+_RAW_DB_URL = os.environ.get("DATABASE_URL", "").strip()
+# Railway/Heroku sometimes hand out the older "postgres" scheme; psycopg 3 wants
+# the "postgresql" scheme. Normalize the scheme prefix so either form works.
+_OLD_SCHEME = "postgres" + "://"
+_NEW_SCHEME = "postgresql" + "://"
+if _RAW_DB_URL.startswith(_OLD_SCHEME) and not _RAW_DB_URL.startswith(_NEW_SCHEME):
+    DATABASE_URL = _NEW_SCHEME + _RAW_DB_URL[len(_OLD_SCHEME):]
+else:
+    DATABASE_URL = _RAW_DB_URL
+
+USE_PG = bool(DATABASE_URL)
+PH = "%s"  # Postgres placeholder; SQLite uses "?" (translated in _q)
+
+# SQLite fallback path (local dev / tests). Env-overridable.
 DB_PATH = os.environ.get("JOURNAL_DB_PATH", "journal.db")
 
-# Allowed lifecycle states for a journal entry.
+# Allowed lifecycle values.
 VALID_STATUS = {"idea", "open", "closed", "cancelled"}
 VALID_DIRECTION = {"long", "short", "none"}
 VALID_OUTCOME = {"win", "loss", "breakeven", None}
 
 
-def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=5.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA busy_timeout=5000;")
-    return conn
+@contextmanager
+def _conn() -> Iterator[Any]:
+    """Yield a connection for the active backend, committing on clean exit."""
+    if USE_PG:
+        import psycopg  # lazy import so dev without psycopg still works
+
+        conn = psycopg.connect(DATABASE_URL, autocommit=False)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DB_PATH, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def _q(sql: str) -> str:
+    """Translate the canonical "?" placeholders to the active dialect."""
+    return sql.replace("?", PH) if USE_PG else sql
 
 
 def init_db() -> None:
-    """Create the schema if it doesn't exist. Safe to call repeatedly (idempotent)."""
-    with _conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS journal_entries (
-                id              TEXT PRIMARY KEY,
-                owner_id        TEXT NOT NULL,
-                created_at      REAL NOT NULL,
-                updated_at      REAL NOT NULL,
+    """Create the schema if absent. Idempotent — safe to call on every boot."""
+    # JSONB on Postgres (queryable, validated), TEXT on SQLite.
+    analysis_type = "JSONB" if USE_PG else "TEXT"
+    ddl = f"""
+        CREATE TABLE IF NOT EXISTS journal_entries (
+            id              TEXT PRIMARY KEY,
+            owner_id        TEXT NOT NULL,
+            created_at      DOUBLE PRECISION NOT NULL,
+            updated_at      DOUBLE PRECISION NOT NULL,
 
-                -- Saved analysis snapshot (immutable record of what the Copilot said)
-                symbol          TEXT NOT NULL,
-                interval        TEXT,
-                lean            TEXT,
-                conviction      INTEGER,
-                summary         TEXT,
-                range_low       REAL,
-                range_high      REAL,
-                range_source    TEXT,
-                analysis_json   TEXT,          -- full analysis blob for fidelity
+            symbol          TEXT NOT NULL,
+            interval        TEXT,
+            lean            TEXT,
+            conviction      INTEGER,
+            summary         TEXT,
+            range_low       DOUBLE PRECISION,
+            range_high      DOUBLE PRECISION,
+            range_source    TEXT,
+            analysis_json   {analysis_type},
 
-                -- The user's own trade record
-                status          TEXT NOT NULL DEFAULT 'idea',
-                direction       TEXT DEFAULT 'none',
-                entry_price     REAL,
-                exit_price      REAL,
-                size            REAL,
-                stop_price      REAL,
-                target_price    REAL,
-                outcome         TEXT,
-                pnl             REAL,
-                notes           TEXT
-            )
-            """
+            status          TEXT NOT NULL DEFAULT 'idea',
+            direction       TEXT DEFAULT 'none',
+            entry_price     DOUBLE PRECISION,
+            exit_price      DOUBLE PRECISION,
+            size            DOUBLE PRECISION,
+            stop_price      DOUBLE PRECISION,
+            target_price    DOUBLE PRECISION,
+            outcome         TEXT,
+            pnl             DOUBLE PRECISION,
+            notes           TEXT
         )
-        conn.execute(
+    """
+    if not USE_PG:
+        # SQLite is loosely typed; REAL stands in for DOUBLE PRECISION.
+        ddl = ddl.replace("DOUBLE PRECISION", "REAL")
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(ddl)
+        cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_journal_owner "
             "ON journal_entries(owner_id, created_at DESC)"
         )
@@ -88,12 +137,26 @@ _EDITABLE = {
     "stop_price", "target_price", "outcome", "pnl", "notes",
 }
 
+# Canonical column order so we can map rows positionally on BOTH backends
+# (psycopg returns plain tuples; sqlite Rows are also index-addressable).
+_COLS = [
+    "id", "owner_id", "created_at", "updated_at",
+    "symbol", "interval", "lean", "conviction", "summary",
+    "range_low", "range_high", "range_source", "analysis_json",
+    "status", "direction", "entry_price", "exit_price", "size",
+    "stop_price", "target_price", "outcome", "pnl", "notes",
+]
+_COL_LIST = ", ".join(_COLS)
 
-def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    d = dict(row)
-    # Expand the analysis snapshot into a nested object for the client.
+
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    """Map a positional row to the public dict shape."""
+    d = {col: row[i] for i, col in enumerate(_COLS)}
     aj = d.pop("analysis_json", None)
-    d["analysis"] = json.loads(aj) if aj else None
+    if isinstance(aj, str):
+        d["analysis"] = json.loads(aj) if aj else None
+    else:
+        d["analysis"] = aj  # Postgres JSONB already decoded to dict/None
     d["range_24h"] = {
         "low": d.pop("range_low", None),
         "high": d.pop("range_high", None),
@@ -102,13 +165,18 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return d
 
 
-def create_entry(owner_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Persist a new journal entry from a (typically Copilot) analysis + trade fields.
+def _dump_analysis(analysis: dict | None) -> Any:
+    """Serialize the analysis blob appropriately for the active backend."""
+    if not analysis:
+        return None
+    if USE_PG:
+        from psycopg.types.json import Jsonb
+        return Jsonb(analysis)
+    return json.dumps(analysis)
 
-    `payload` may carry a full `analysis` dict (the Copilot result) and/or explicit
-    trade fields. We extract the snapshot columns for cheap querying and keep the
-    full analysis blob for fidelity.
-    """
+
+def create_entry(owner_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Persist a new journal entry from a (typically Copilot) analysis + trade fields."""
     if not owner_id:
         raise ValueError("owner_id required")
 
@@ -127,33 +195,35 @@ def create_entry(owner_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
     now = time.time()
     eid = uuid.uuid4().hex
+    sql = _q(
+        """
+        INSERT INTO journal_entries (
+            id, owner_id, created_at, updated_at,
+            symbol, interval, lean, conviction, summary,
+            range_low, range_high, range_source, analysis_json,
+            status, direction, entry_price, exit_price, size,
+            stop_price, target_price, outcome, pnl, notes
+        ) VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?,?,?)
+        """
+    )
+    args = (
+        eid, owner_id, now, now,
+        symbol,
+        payload.get("interval") or analysis.get("interval"),
+        analysis.get("lean"),
+        analysis.get("conviction"),
+        analysis.get("summary"),
+        rng.get("low"), rng.get("high"), rng.get("source"),
+        _dump_analysis(analysis),
+        status, direction,
+        payload.get("entry_price"), payload.get("exit_price"),
+        payload.get("size"), payload.get("stop_price"),
+        payload.get("target_price"), payload.get("outcome"),
+        payload.get("pnl"), payload.get("notes"),
+    )
     with _conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO journal_entries (
-                id, owner_id, created_at, updated_at,
-                symbol, interval, lean, conviction, summary,
-                range_low, range_high, range_source, analysis_json,
-                status, direction, entry_price, exit_price, size,
-                stop_price, target_price, outcome, pnl, notes
-            ) VALUES (?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?,?,?, ?,?,?,?,?)
-            """,
-            (
-                eid, owner_id, now, now,
-                symbol,
-                payload.get("interval") or analysis.get("interval"),
-                analysis.get("lean"),
-                analysis.get("conviction"),
-                analysis.get("summary"),
-                rng.get("low"), rng.get("high"), rng.get("source"),
-                json.dumps(analysis) if analysis else None,
-                status, direction,
-                payload.get("entry_price"), payload.get("exit_price"),
-                payload.get("size"), payload.get("stop_price"),
-                payload.get("target_price"), payload.get("outcome"),
-                payload.get("pnl"), payload.get("notes"),
-            ),
-        )
+        conn.cursor().execute(sql, args)
+
     created = get_entry(owner_id, eid)
     assert created is not None  # just inserted; present by construction
     return created
@@ -162,24 +232,26 @@ def create_entry(owner_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 def list_entries(owner_id: str, status: str | None = None,
                  limit: int = 200) -> list[dict[str, Any]]:
     """Return an owner's entries, newest first. Optionally filter by status."""
-    q = "SELECT * FROM journal_entries WHERE owner_id = ?"
+    sql = f"SELECT {_COL_LIST} FROM journal_entries WHERE owner_id = ?"
     args: list[Any] = [owner_id]
     if status:
-        q += " AND status = ?"
+        sql += " AND status = ?"
         args.append(status.lower())
-    q += " ORDER BY created_at DESC LIMIT ?"
+    sql += " ORDER BY created_at DESC LIMIT ?"
     args.append(int(limit))
     with _conn() as conn:
-        rows = conn.execute(q, args).fetchall()
+        cur = conn.cursor()
+        cur.execute(_q(sql), args)
+        rows = cur.fetchall()
     return [_row_to_dict(r) for r in rows]
 
 
 def get_entry(owner_id: str, entry_id: str) -> dict[str, Any] | None:
+    sql = _q(f"SELECT {_COL_LIST} FROM journal_entries WHERE owner_id = ? AND id = ?")
     with _conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM journal_entries WHERE owner_id = ? AND id = ?",
-            (owner_id, entry_id),
-        ).fetchone()
+        cur = conn.cursor()
+        cur.execute(sql, (owner_id, entry_id))
+        row = cur.fetchone()
     return _row_to_dict(row) if row else None
 
 
@@ -199,37 +271,37 @@ def update_entry(owner_id: str, entry_id: str,
     updates["updated_at"] = time.time()
     cols = ", ".join(f"{k} = ?" for k in updates)
     args = list(updates.values()) + [owner_id, entry_id]
+    sql = _q(f"UPDATE journal_entries SET {cols} WHERE owner_id = ? AND id = ?")
     with _conn() as conn:
-        cur = conn.execute(
-            f"UPDATE journal_entries SET {cols} WHERE owner_id = ? AND id = ?",
-            args,
-        )
+        cur = conn.cursor()
+        cur.execute(sql, args)
         if cur.rowcount == 0:
             return None
     return get_entry(owner_id, entry_id)
 
 
 def delete_entry(owner_id: str, entry_id: str) -> bool:
+    sql = _q("DELETE FROM journal_entries WHERE owner_id = ? AND id = ?")
     with _conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM journal_entries WHERE owner_id = ? AND id = ?",
-            (owner_id, entry_id),
-        )
+        cur = conn.cursor()
+        cur.execute(sql, (owner_id, entry_id))
         return cur.rowcount > 0
 
 
 def stats(owner_id: str) -> dict[str, Any]:
     """Simple performance summary across an owner's CLOSED entries."""
+    sql = _q(
+        "SELECT outcome, pnl FROM journal_entries "
+        "WHERE owner_id = ? AND status = 'closed'"
+    )
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT outcome, pnl FROM journal_entries "
-            "WHERE owner_id = ? AND status = 'closed'",
-            (owner_id,),
-        ).fetchall()
+        cur = conn.cursor()
+        cur.execute(sql, (owner_id,))
+        rows = cur.fetchall()
     total = len(rows)
-    wins = sum(1 for r in rows if r["outcome"] == "win")
-    losses = sum(1 for r in rows if r["outcome"] == "loss")
-    total_pnl = sum((r["pnl"] or 0.0) for r in rows)
+    wins = sum(1 for r in rows if r[0] == "win")
+    losses = sum(1 for r in rows if r[0] == "loss")
+    total_pnl = sum((r[1] or 0.0) for r in rows)
     decided = wins + losses
     return {
         "closed_trades": total,
