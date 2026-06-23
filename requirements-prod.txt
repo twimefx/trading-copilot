@@ -1,8 +1,10 @@
 # Lean production deps for the backend API (NO torch/Kronos — kept out to stay cheap).
 # Kronos is an optional separate service; the Copilot + Scanner work without it.
-fastapi
-uvicorn[standard]
-anthropic
-pandas
-numpy
-pydantic
+# Pinned with ~= (compatible release) so patch/minor updates flow but no surprise
+# major bumps break the production Docker build. Versions match the tested local venv.
+fastapi~=0.138.0
+uvicorn[standard]~=0.49.0
+anthropic~=0.111.0
+pandas~=2.2.2
+numpy~=2.5.0
+pydantic~=2.13.4
