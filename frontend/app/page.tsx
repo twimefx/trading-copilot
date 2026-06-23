@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import TradingViewChart from "@/components/TradingViewChart";
 
 type Range = { low: number; high: number; source: string };
 type Analysis = {
@@ -57,7 +58,7 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen max-w-3xl mx-auto px-5 py-10">
+    <main className="min-h-screen max-w-5xl mx-auto px-5 py-10">
       <header className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">
           AI Trading <span className="text-accent">Copilot</span>
@@ -115,6 +116,11 @@ export default function Home() {
             Kronos range adds a CPU forecast (~30–90s). Off = faster.
           </p>
         )}
+      </div>
+
+      {/* Live chart */}
+      <div className="mb-6">
+        <TradingViewChart symbol={symbol} interval={interval} />
       </div>
 
       {error && (
