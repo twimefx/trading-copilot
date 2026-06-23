@@ -1,0 +1,8 @@
+# Lean production deps for the backend API (NO torch/Kronos — kept out to stay cheap).
+# Kronos is an optional separate service; the Copilot + Scanner work without it.
+fastapi
+uvicorn[standard]
+anthropic
+pandas
+numpy
+pydantic

@@ -53,8 +53,12 @@ def build_market_context(
         open_interest=provider.fetch_open_interest(symbol),
     )
     if include_kronos:
-        from backend.signals.kronos_range import forecast_range
-        ctx.kronos_range = forecast_range(df, pred_len=24, sample_count=3)
+        try:
+            from backend.signals.kronos_range import forecast_range
+            ctx.kronos_range = forecast_range(df, pred_len=24, sample_count=3)
+        except Exception as e:  # noqa: BLE001
+            # Kronos (torch) may be absent in lean production builds — degrade gracefully.
+            ctx.kronos_range = {"available": False, "note": f"Kronos unavailable: {str(e)[:80]}"}
     return ctx
 
 

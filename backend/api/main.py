@@ -6,10 +6,24 @@ Endpoints:
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI(title="AI Trading Copilot", version="0.1.0")
+
+# CORS — set FRONTEND_ORIGIN in prod (e.g. https://yourapp.vercel.app).
+# Defaults to "*" for easy demo; tighten before real launch.
+_origins = os.environ.get("FRONTEND_ORIGIN", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class CopilotRequest(BaseModel):

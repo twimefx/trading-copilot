@@ -37,3 +37,4 @@ data/raw/
 
 # Kronos clone (vendored separately)
 vendor/Kronos/
+.venv-prod/
