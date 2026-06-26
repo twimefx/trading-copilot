@@ -59,3 +59,30 @@ def test_snapshot_has_keys():
     snap = ind.snapshot(df)
     for key in ["last_close", "rsi_14", "macd", "atr_14", "atr_pct", "volume_trend", "sma_200"]:
         assert key in snap
+
+
+def test_snapshot_preserves_forex_precision():
+    """Regression: 2dp rounding zeroed forex ATR (~0.0008 -> 0.0), collapsing the
+    volatility band to a single value. Snapshot must keep sub-cent precision for
+    low-priced instruments."""
+    rng = np.random.default_rng(7)
+    n = 250
+    close = 1.1400 + np.cumsum(rng.standard_normal(n) * 0.0004)
+    df = pd.DataFrame({
+        "open": close,
+        "high": close + np.abs(rng.standard_normal(n) * 0.0005),
+        "low": close - np.abs(rng.standard_normal(n) * 0.0005),
+        "close": close,
+        "volume": rng.random(n) * 1000,
+    })
+    snap = ind.snapshot(df)
+    assert snap["atr_14"] > 0, "forex ATR was rounded to zero"
+    # EMA20 should not be flattened to exactly the close's 2dp value
+    assert snap["ema_20"] != round(float(close[-1]), 2) or snap["ema_20"] != snap["last_close"]
+
+
+def test_price_dp_scales_with_magnitude():
+    assert ind._price_dp(59000.0) == 2
+    assert ind._price_dp(1.1437) == 5
+    assert ind._price_dp(0.5) == 6
+    assert ind._price_dp(0.0008) == 8
