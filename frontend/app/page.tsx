@@ -42,6 +42,14 @@ function convictionLabel(c?: number) {
 function hasRange(r?: Range) {
   return !!r && r.low != null && r.high != null;
 }
+// Price-aware formatter — mirrors the backend's magnitude-based precision so
+// forex/metals bands (e.g. 1.1437) don't collapse to "1.14 – 1.14".
+function fmtPrice(n?: number | null) {
+  if (n == null) return "—";
+  const v = Math.abs(n);
+  const dp = v >= 100 ? 2 : v >= 1 ? 4 : v >= 0.01 ? 5 : 6;
+  return n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
 
 export default function Home() {
   const [symbol, setSymbol] = useState("BTCUSDT");
@@ -281,7 +289,7 @@ export default function Home() {
                   24H RANGE <span className="text-neutral/60 font-normal">· {result.range_24h!.source}</span>
                 </h3>
                 <div className="text-lg font-mono">
-                  ${result.range_24h!.low?.toLocaleString()} – ${result.range_24h!.high?.toLocaleString()}
+                  ${fmtPrice(result.range_24h!.low)} – ${fmtPrice(result.range_24h!.high)}
                 </div>
                 <p className="text-xs text-neutral mt-1">
                   {result.range_24h!.source === "Kronos"

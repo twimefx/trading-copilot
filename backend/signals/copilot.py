@@ -92,6 +92,23 @@ Respond ONLY with valid JSON in exactly this shape:
 }"""
 
 
+def _price_decimals(value: float) -> int:
+    """Choose a sensible number of decimal places for a price band.
+
+    Crypto majors trade in the thousands (round to 2dp); forex (~1.14) and
+    metals/JPY need more precision or the low/high collapse to the same number
+    when rounded to 2dp. Scale decimals to the price magnitude.
+    """
+    v = abs(value)
+    if v >= 100:      # BTC, ETH(hundreds+), XAU(~2000), indices
+        return 2
+    if v >= 1:        # most FX majors (EURUSD ~1.14), mid-priced alts
+        return 4
+    if v >= 0.01:     # XRP, small alts
+        return 5
+    return 6          # micro-priced assets
+
+
 def _compute_range(ctx: MarketContext) -> dict:
     """Authoritative 24h range — NEVER LLM-invented.
 
@@ -110,9 +127,12 @@ def _compute_range(ctx: MarketContext) -> dict:
     if close is not None and atr is not None:
         # ~24 1h-bars of ATR drift as a rough 1-sigma-ish band; honest heuristic, labeled as such.
         span = atr * 4.0
+        # Precision must scale with price magnitude, else forex/JPY bands round
+        # to identical low==high (e.g. 1.14 – 1.14). Base decimals on the close.
+        dp = _price_decimals(close)
         return {
-            "low": round(close - span, 2),
-            "high": round(close + span, 2),
+            "low": round(close - span, dp),
+            "high": round(close + span, dp),
             "source": "ATR estimate",
         }
     return {"low": None, "high": None, "source": "unavailable"}

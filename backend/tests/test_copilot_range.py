@@ -49,3 +49,29 @@ def test_kronos_dict_with_null_bounds_is_not_treated_as_kronos():
     )
     r = _compute_range(ctx)
     assert r["source"] == "ATR estimate"
+
+
+def test_forex_range_does_not_collapse_to_identical_bounds():
+    # Regression: forex (~1.14) rounded to 2dp produced low == high == 1.14,
+    # rendering a useless "1.14 – 1.14" band. Precision must scale with price.
+    ctx = _ctx(indicators={"last_close": 1.1437, "atr_14": 0.0008})
+    r = _compute_range(ctx)
+    assert r["source"] == "ATR estimate"
+    assert r["low"] != r["high"], "forex band collapsed to a single value"
+    assert r["low"] < 1.1437 < r["high"]
+
+
+def test_price_decimals_scale_with_magnitude():
+    from backend.signals.copilot import _price_decimals
+    assert _price_decimals(59000.0) == 2   # BTC
+    assert _price_decimals(2034.5) == 2     # gold
+    assert _price_decimals(1.1437) == 4     # forex major
+    assert _price_decimals(0.5) == 5        # sub-dollar alt
+    assert _price_decimals(0.0009) == 6     # micro-priced
+
+
+def test_jpy_and_gold_bands_are_distinct():
+    for close, atr in [(157.23, 0.18), (2034.5, 6.2)]:
+        r = _compute_range(_ctx(indicators={"last_close": close, "atr_14": atr}))
+        assert r["low"] != r["high"]
+        assert r["low"] < close < r["high"]
