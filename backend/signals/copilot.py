@@ -9,6 +9,7 @@ Output is structured and ALWAYS carries a not-financial-advice disclaimer.
 from __future__ import annotations
 
 import json
+import re
 
 from backend.ai.router import AIRouter, TaskClass
 from backend.signals.context import MarketContext, build_market_context
@@ -17,6 +18,48 @@ DISCLAIMER = (
     "This is AI-generated market analysis, not financial advice. "
     "Signals are assistive and NOT a guarantee of profit. Trading involves substantial risk of loss."
 )
+
+# Matches an LLM mid-sentence self-correction such as
+#   "... and below... actually above its signal ..."
+#   "... is X, wait no, Y ..."
+#   "... rising — no, falling ..."
+# i.e. an aborted clause followed by an ellipsis/dash and a correction marker.
+# We drop the aborted fragment and keep the corrected assertion so production
+# text never exposes the model second-guessing itself.
+_SELF_CORRECTION_RE = re.compile(
+    r"\s*\b(\w+(?:\s+\w+){0,3})\s*"          # short aborted fragment (1-4 words)
+    r"(?:\.{2,}|—|–|-{1,2}|,)\s*"             # ellipsis / dash / comma break
+    r"(?:actually|wait,?\s*no|no,|correction:|i mean)\s+",  # correction marker
+    re.IGNORECASE,
+)
+
+
+def _sanitize_text(s: str) -> str:
+    """Remove leaked LLM self-corrections from a single string.
+
+    Keeps the corrected clause, drops the aborted fragment + correction marker.
+    Best-effort and idempotent; leaves clean text untouched.
+    """
+    if not isinstance(s, str) or not s:
+        return s
+    cleaned = _SELF_CORRECTION_RE.sub(" ", s)
+    # Tidy any doubled spaces / space-before-punctuation left behind.
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def _clean_result(result: dict) -> dict:
+    """Sanitize all free-text LLM fields in-place before returning to the client."""
+    if isinstance(result.get("summary"), str):
+        result["summary"] = _sanitize_text(result["summary"])
+    for key in ("drivers", "risks"):
+        items = result.get(key)
+        if isinstance(items, list):
+            result[key] = [_sanitize_text(x) if isinstance(x, str) else x for x in items]
+    if isinstance(result.get("suggested_invalidation"), str):
+        result["suggested_invalidation"] = _sanitize_text(result["suggested_invalidation"])
+    return result
 
 SYSTEM_PROMPT = """You are an elite, brutally honest market analyst for a retail trading platform.
 
@@ -35,6 +78,8 @@ CRITICAL RULES:
   lower conviction.
 - Do NOT invent a price range. The system computes the range deterministically and adds it
   AFTER you respond. Do not output a range_24h field.
+- Write every field as a FINISHED statement. Do NOT narrate your own reasoning or self-correct
+  mid-sentence (no "...actually...", "wait, no", "I mean"). State only the final, correct claim.
 
 Respond ONLY with valid JSON in exactly this shape:
 {
@@ -101,6 +146,8 @@ def analyze(ctx: MarketContext, router: AIRouter | None = None) -> dict:
     result["cost_usd"] = round(router.cost_log.total_usd, 5)
     # Range is authoritative/deterministic — never trust an LLM-invented band.
     result["range_24h"] = _compute_range(ctx)
+    # Strip any leaked mid-sentence self-corrections from free-text fields.
+    _clean_result(result)
     return result
 
 

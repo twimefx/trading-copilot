@@ -44,3 +44,4 @@ journal.db
 # Kronos clone (vendored separately)
 vendor/Kronos/
 .venv-prod/
+.vercel

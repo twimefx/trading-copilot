@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 
 // Maps our interval values to TradingView's interval codes.
 const TV_INTERVAL: Record<string, string> = {
@@ -63,11 +63,15 @@ function TradingViewChart({ symbol, interval }: { symbol: string; interval: stri
       className="rounded-2xl overflow-hidden border border-white/5 bg-panel"
       style={{ height: 460 }}
     >
-      <div ref={container} className="tradingview-widget-container" style={{ height: "100%", width: "100%" }}>
-        <div className="tradingview-widget-container__widget" style={{ height: "calc(100% - 32px)", width: "100%" }} />
-      </div>
+      {/* TradingView's embed script injects its widget into this container.
+          We do NOT render a React-managed child here: React reconciliation
+          would otherwise wipe the script-injected DOM on parent re-renders
+          (e.g. when an analysis result loads), blanking the chart. */}
+      <div ref={container} className="tradingview-widget-container" style={{ height: "100%", width: "100%" }} />
     </div>
   );
 }
 
-export default TradingViewChart;
+// Memoized so parent state changes (loading / analysis result) don't force a
+// remount of the chart — only a symbol/interval change re-runs the embed.
+export default memo(TradingViewChart);
