@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from backend.api import auth as auth_mod
 from backend.api.auth import current_user_id
 from backend.api.guards import (
     client_key,
@@ -116,9 +117,11 @@ def copilot(req: CopilotRequest, request: Request,
     if cached is not None:
         return {**cached, "cached": True}
 
-    # 2. Per-user daily tier quota — the monetization gate.
+    # 2. Per-user daily tier quota — the monetization gate. Skipped in open mode
+    #    (Clerk unconfigured): there's no per-user identity to meter, so the global
+    #    daily spend cap (step 4) is the sole cost guard, matching the pre-auth app.
     tier = tier_config(user_store.get_tier(user_id))
-    if tier.daily_copilot_quota >= 0:
+    if auth_mod.AUTH_ENABLED and tier.daily_copilot_quota >= 0:
         used = user_store.copilot_calls_today(user_id)
         if used >= tier.daily_copilot_quota:
             return JSONResponse(
@@ -169,9 +172,16 @@ def copilot(req: CopilotRequest, request: Request,
 
 @app.post("/scan")
 def scan(req: ScanRequest, user_id: str = Depends(current_user_id)):
-    """Fast rule-based screen of a watchlist (no LLM). Symbol count capped by tier."""
+    """Fast rule-based screen of a watchlist (no LLM). Symbol count capped by tier.
+
+    In open mode (Clerk unconfigured) the tier cap is not applied — anonymous
+    users get the full watchlist, matching the pre-auth behaviour.
+    """
     tier = tier_config(user_store.get_tier(user_id))
-    symbols = [s.upper() for s in req.symbols][: tier.scan_max_symbols]
+    if auth_mod.AUTH_ENABLED:
+        symbols = [s.upper() for s in req.symbols][: tier.scan_max_symbols]
+    else:
+        symbols = [s.upper() for s in req.symbols]
     key = f"{','.join(sorted(symbols))}:{req.interval}"
     cached = scan_cache.get(key)
     if cached is not None:

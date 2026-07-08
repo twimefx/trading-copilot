@@ -57,6 +57,8 @@ def _client_as(user_id: str) -> TestClient:
 
 def test_free_tier_quota_blocks_with_402(monkeypatch):
     copilot_cache.clear()
+    import backend.api.main as main_mod
+    monkeypatch.setattr(main_mod.auth_mod, "AUTH_ENABLED", True)
 
     def fake_analyze(symbol, interval, include_kronos=True):
         return {"lean": "neutral", "conviction": 50, "cost_usd": 0.01,
@@ -84,6 +86,8 @@ def test_free_tier_quota_blocks_with_402(monkeypatch):
 
 def test_premium_tier_unlimited(monkeypatch):
     copilot_cache.clear()
+    import backend.api.main as main_mod
+    monkeypatch.setattr(main_mod.auth_mod, "AUTH_ENABLED", True)
     monkeypatch.setattr(
         copilot_mod, "analyze_symbol",
         lambda s, i, include_kronos=True: {"lean": "neutral", "conviction": 1,
@@ -121,6 +125,8 @@ def test_me_reports_tier_and_remaining():
 
 def test_scan_capped_by_tier(monkeypatch):
     # Stub the scanner so we can inspect how many symbols reached it.
+    import backend.api.main as main_mod
+    monkeypatch.setattr(main_mod.auth_mod, "AUTH_ENABLED", True)
     import backend.signals.scanner as scanner_mod
     seen = {}
     monkeypatch.setattr(
