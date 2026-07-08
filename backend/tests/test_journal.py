@@ -16,12 +16,26 @@ def store(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def api(tmp_path, monkeypatch):
-    """TestClient whose journal store uses an isolated temp DB."""
+    """TestClient whose journal store uses an isolated temp DB, auth overridden.
+
+    Identity now comes from the verified-JWT dependency, so we override it with a
+    fixed user. `set_api_user` lets a test switch the acting user to check
+    per-user isolation.
+    """
     import backend.journal.store as s
     monkeypatch.setattr(s, "DB_PATH", str(tmp_path / "api_journal.db"))
     s.init_db()
     from backend.api.main import app
-    return TestClient(app)
+    from backend.api.auth import current_user_id
+
+    state = {"user": "client-abc"}
+    app.dependency_overrides[current_user_id] = lambda: state["user"]
+    client = TestClient(app)
+    client.set_api_user = lambda u: state.__setitem__("user", u)  # type: ignore[attr-defined]
+    try:
+        yield client
+    finally:
+        app.dependency_overrides.clear()
 
 
 SAMPLE = {
@@ -107,47 +121,56 @@ def test_stats_win_rate(store):
 
 # --- API --------------------------------------------------------------------
 
-H = {"X-Owner-Id": "client-abc"}
 
-
-def test_api_requires_owner_header(api):
-    r = api.post("/journal", json=SAMPLE)         # no header
-    assert r.status_code == 400
+def test_api_requires_auth(tmp_path, monkeypatch):
+    """With no auth override and no dev-header fallback, the API rejects with 401."""
+    import backend.journal.store as s
+    monkeypatch.setattr(s, "DB_PATH", str(tmp_path / "noauth.db"))
+    s.init_db()
+    # Ensure the dev X-Owner-Id fallback is OFF.
+    import backend.api.auth as auth
+    monkeypatch.setattr(auth, "AUTH_DEV_ALLOW_HEADER", False)
+    from backend.api.main import app
+    app.dependency_overrides.clear()
+    c = TestClient(app)
+    r = c.post("/journal", json=SAMPLE)          # no Authorization header
+    assert r.status_code == 401
 
 
 def test_api_full_lifecycle(api):
     # create
-    r = api.post("/journal", json=SAMPLE, headers=H)
+    r = api.post("/journal", json=SAMPLE)
     assert r.status_code == 201
     eid = r.json()["id"]
 
     # list
-    r = api.get("/journal", headers=H)
+    r = api.get("/journal")
     assert r.status_code == 200
     assert len(r.json()["entries"]) == 1
 
-    # another owner sees nothing
-    r = api.get("/journal", headers={"X-Owner-Id": "someone-else"})
+    # another user sees nothing
+    api.set_api_user("someone-else")
+    r = api.get("/journal")
     assert r.json()["entries"] == []
+    api.set_api_user("client-abc")
 
     # update -> close as a win
-    r = api.patch(f"/journal/{eid}", json={"status": "closed", "outcome": "win", "pnl": 320},
-                  headers=H)
+    r = api.patch(f"/journal/{eid}", json={"status": "closed", "outcome": "win", "pnl": 320})
     assert r.status_code == 200 and r.json()["outcome"] == "win"
 
     # stats reflects it
-    r = api.get("/journal/stats", headers=H)
+    r = api.get("/journal/stats")
     assert r.json()["closed_trades"] == 1 and r.json()["wins"] == 1
 
     # delete
-    r = api.delete(f"/journal/{eid}", headers=H)
+    r = api.delete(f"/journal/{eid}")
     assert r.status_code == 204
-    r = api.get(f"/journal/{eid}", headers=H)
+    r = api.get(f"/journal/{eid}")
     assert r.status_code == 404
 
 
 def test_api_update_missing_returns_404(api):
-    r = api.patch("/journal/doesnotexist", json={"notes": "x"}, headers=H)
+    r = api.patch("/journal/doesnotexist", json={"notes": "x"})
     assert r.status_code == 404
 
 

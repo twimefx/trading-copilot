@@ -1,14 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  JournalEntry,
-  JournalStats,
-  deleteEntry,
-  getStats,
-  listEntries,
-  updateEntry,
-} from "@/lib/journal";
+import { JournalEntry, JournalStats } from "@/lib/journal";
+import type { useApi } from "@/lib/api";
+
+type Api = ReturnType<typeof useApi>;
 
 const STATUS_TABS = ["all", "idea", "open", "closed"] as const;
 type StatusFilter = (typeof STATUS_TABS)[number];
@@ -28,7 +24,7 @@ function fmtNum(n?: number | null) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-export default function Journal({ refreshKey }: { refreshKey?: number }) {
+export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: number }) {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [stats, setStats] = useState<JournalStats | null>(null);
   const [filter, setFilter] = useState<StatusFilter>("all");
@@ -40,10 +36,10 @@ export default function Journal({ refreshKey }: { refreshKey?: number }) {
     setError(null);
     try {
       const [es, st] = await Promise.all([
-        listEntries(filter === "all" ? undefined : filter),
-        getStats(),
+        api.journalList(filter === "all" ? undefined : filter),
+        api.journalStats() as Promise<JournalStats>,
       ]);
-      setEntries(es);
+      setEntries(es as JournalEntry[]);
       setStats(st);
     } catch (e: any) {
       setError(e.message || "Failed to load journal");
@@ -59,7 +55,7 @@ export default function Journal({ refreshKey }: { refreshKey?: number }) {
 
   async function patch(id: string, fields: Record<string, any>) {
     try {
-      await updateEntry(id, fields);
+      await api.journalUpdate(id, fields);
       await load();
     } catch (e: any) {
       setError(e.message || "Update failed");
@@ -68,7 +64,7 @@ export default function Journal({ refreshKey }: { refreshKey?: number }) {
 
   async function remove(id: string) {
     try {
-      await deleteEntry(id);
+      await api.journalDelete(id);
       await load();
     } catch (e: any) {
       setError(e.message || "Delete failed");

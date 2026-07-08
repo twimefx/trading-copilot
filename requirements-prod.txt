@@ -12,3 +12,8 @@ pydantic~=2.13.4
 # DATABASE_URL; falls back to stdlib sqlite3 when DATABASE_URL is unset (local dev).
 # psycopg[binary] ships a prebuilt wheel — no system libpq/compiler needed.
 psycopg[binary]~=3.2.0
+# Auth: verify Clerk session JWTs (RS256) against their JWKS. [crypto] pulls the
+# cryptography wheel needed for RSA signature verification.
+pyjwt[crypto]~=2.10.0
+# Billing: Stripe Checkout + webhook signature verification.
+stripe~=11.4.0

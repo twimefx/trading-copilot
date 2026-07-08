@@ -1,14 +1,9 @@
 """API smoke tests + guard behavior (cache prevents repeat LLM calls)."""
-from fastapi.testclient import TestClient
-
 import backend.signals.copilot as copilot_mod
-from backend.api.main import app
-from backend.api.guards import copilot_cache, spend_guard
-
-client = TestClient(app)
+from backend.api.guards import copilot_cache
 
 
-def test_health():
+def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
@@ -16,7 +11,7 @@ def test_health():
     assert "spend_today_usd" in body
 
 
-def test_copilot_caches_and_avoids_second_llm_call(monkeypatch):
+def test_copilot_caches_and_avoids_second_llm_call(client, monkeypatch):
     copilot_cache.clear()
     calls = {"n": 0}
 

@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import type { useApi } from "@/lib/api";
+
+type Api = ReturnType<typeof useApi>;
 
 type ScanItem = {
   symbol: string;
@@ -50,7 +53,7 @@ function rsiTone(rsi?: number) {
   return "text-neutral";
 }
 
-export default function Scanner({ onPick }: { onPick?: (symbol: string) => void }) {
+export default function Scanner({ api, onPick }: { api: Api; onPick?: (symbol: string) => void }) {
   const [symbols, setSymbols] = useState(CRYPTO_WATCHLIST.join(", "));
   const [interval, setIntervalVal] = useState("1h");
   const [loading, setLoading] = useState(false);
@@ -70,13 +73,7 @@ export default function Scanner({ onPick }: { onPick?: (symbol: string) => void 
     setError(null);
     try {
       const list = symbols.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-      const res = await fetch("/api/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbols: list, interval }),
-      });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-      const data = await res.json();
+      const data: any = await api.scan({ symbols: list, interval });
       setResults(data.results || []);
       setScanned(true);
     } catch (e: any) {

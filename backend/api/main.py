@@ -2,28 +2,29 @@
 
 Endpoints:
     GET  /health           -> liveness + today's LLM spend
-    POST /copilot          -> {symbol, interval, include_kronos} -> analysis JSON
-    POST /scan             -> {symbols, interval} -> rule-based watchlist screen
-    POST   /journal        -> save an analysis / trade idea
-    GET    /journal        -> list this owner's entries (optional ?status=)
-    GET    /journal/stats  -> performance summary across closed trades
-    GET    /journal/{id}   -> fetch one entry
-    PATCH  /journal/{id}   -> update trade fields (status, entry/exit, notes, outcome)
-    DELETE /journal/{id}   -> remove an entry
+    GET  /me               -> current user's tier, quota, and usage (auth)
+    POST /copilot          -> {symbol, interval, include_kronos} -> analysis JSON (auth + quota)
+    POST /scan             -> {symbols, interval} -> rule-based watchlist screen (auth, tier-capped)
+    POST /billing/checkout -> {tier} -> Stripe Checkout URL (auth)
+    POST /billing/portal   -> Stripe billing-portal URL to manage/cancel (auth)
+    POST /billing/webhook  -> Stripe subscription events (signature-verified, no auth)
+    /journal*              -> Trade Journal CRUD, scoped to the authenticated user
 
-The journal is scoped by an X-Owner-Id header (a client-generated UUID) — no auth
-yet, but the model upgrades cleanly to authenticated user ids later.
+Identity: a Clerk session JWT (Authorization: Bearer ***) is verified and its
+`sub` becomes the owner/user id everything is scoped by. In dev/tests, when
+AUTH_DEV_ALLOW_HEADER=1, a legacy X-Owner-Id header is accepted instead.
 """
 from __future__ import annotations
 
 import logging
 import os
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from backend.api.auth import current_user_id
 from backend.api.guards import (
     client_key,
     copilot_cache,
@@ -31,17 +32,20 @@ from backend.api.guards import (
     scan_cache,
     spend_guard,
 )
+from backend.billing import PRO, PREMIUM, get_tier as tier_config
+from backend.billing import users as user_store
 from backend.journal import store as journal_store
 
 logger = logging.getLogger("copilot.api")
 
-app = FastAPI(title="AI Trading Copilot", version="0.1.0")
+app = FastAPI(title="AI Trading Copilot", version="0.2.0")
 
-# Initialize the journal DB once at import (idempotent — safe on every worker boot).
+# Initialize DBs once at import (idempotent — safe on every worker boot).
 journal_store.init_db()
+user_store.init_db()
 
-# CORS — set FRONTEND_ORIGIN in prod (e.g. https://yourapp.vercel.app).
-# Defaults to "*" for easy demo; tighten before real launch.
+# CORS — set FRONTEND_ORIGIN in prod (comma-separated allowed origins).
+# allow_credentials stays False; auth travels in the Authorization header, not cookies.
 _origins = os.environ.get("FRONTEND_ORIGIN", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -63,32 +67,74 @@ class ScanRequest(BaseModel):
     interval: str = "1h"
 
 
+class CheckoutRequest(BaseModel):
+    tier: str  # "pro" | "premium"
+
+
 @app.get("/health")
 def health():
     return {
         "status": "ok",
         "service": "trading-copilot",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "spend_today_usd": spend_guard.spent_today,
         "spend_cap_usd": spend_guard.cap,
     }
 
 
+@app.get("/me")
+def me(user_id: str = Depends(current_user_id)):
+    """Current user's entitlement + today's usage — powers the UI's tier badge/quota."""
+    tier_name = user_store.get_tier(user_id)
+    tier = tier_config(tier_name)
+    used = user_store.copilot_calls_today(user_id)
+    quota = tier.daily_copilot_quota
+    return {
+        "user_id": user_id,
+        "tier": tier_name,
+        "daily_copilot_quota": quota,
+        "copilot_calls_today": used,
+        "copilot_calls_remaining": (None if quota < 0 else max(quota - used, 0)),
+        "scan_max_symbols": tier.scan_max_symbols,
+        "features": sorted(tier.features),
+    }
+
+
 @app.post("/copilot")
-def copilot(req: CopilotRequest, request: Request):
+def copilot(req: CopilotRequest, request: Request,
+            user_id: str = Depends(current_user_id)):
     """Run the AI Market Copilot for a symbol and return the structured analysis.
 
-    Guarded: cache (free repeats) -> per-IP rate limit -> daily spend cap.
+    Guarded: cache (free repeats) -> per-user daily tier quota -> per-IP rate
+    limit -> global daily spend cap.
     """
     sym = req.symbol.upper()
     cache_key = f"{sym}:{req.interval}:{int(req.include_kronos)}"
 
-    # 1. Cache — repeat requests within TTL are free (no LLM call).
+    # 1. Cache — repeat requests within TTL are free (no LLM call, no quota burn).
     cached = copilot_cache.get(cache_key)
     if cached is not None:
         return {**cached, "cached": True}
 
-    # 2. Per-IP rate limit (only counts when we'd actually spend).
+    # 2. Per-user daily tier quota — the monetization gate.
+    tier = tier_config(user_store.get_tier(user_id))
+    if tier.daily_copilot_quota >= 0:
+        used = user_store.copilot_calls_today(user_id)
+        if used >= tier.daily_copilot_quota:
+            return JSONResponse(
+                status_code=402,  # Payment Required — upgrade to continue
+                content={
+                    "detail": (
+                        f"Daily limit reached for the {tier.name} plan "
+                        f"({tier.daily_copilot_quota}/day). Upgrade for more."
+                    ),
+                    "tier": tier.name,
+                    "quota": tier.daily_copilot_quota,
+                    "upgrade": True,
+                },
+            )
+
+    # 3. Per-IP rate limit (cheap anti-hammer, independent of tier).
     allowed, retry = copilot_limiter.allow(client_key(request))
     if not allowed:
         return JSONResponse(
@@ -97,7 +143,7 @@ def copilot(req: CopilotRequest, request: Request):
             content={"detail": f"Rate limit reached. Try again in ~{retry // 60 + 1} min."},
         )
 
-    # 3. Global daily spend ceiling — hard stop against runaway bills.
+    # 4. Global daily spend ceiling — hard stop against runaway bills.
     if not spend_guard.check():
         return JSONResponse(
             status_code=429,
@@ -115,25 +161,74 @@ def copilot(req: CopilotRequest, request: Request):
         raise HTTPException(status_code=500, detail=f"Copilot error: {type(e).__name__}: {e}") from e
 
     spend_guard.add(float(result.get("cost_usd") or 0.0))
+    # Count the paid call against the user's daily quota (only on a real LLM call).
+    user_store.incr_copilot_call(user_id)
     copilot_cache.set(cache_key, result)
     return {**result, "cached": False}
 
 
 @app.post("/scan")
-def scan(req: ScanRequest):
-    """Fast rule-based screen of a watchlist (no LLM). Ranked by conviction. Lightly cached."""
-    key = f"{','.join(sorted(s.upper() for s in req.symbols))}:{req.interval}"
+def scan(req: ScanRequest, user_id: str = Depends(current_user_id)):
+    """Fast rule-based screen of a watchlist (no LLM). Symbol count capped by tier."""
+    tier = tier_config(user_store.get_tier(user_id))
+    symbols = [s.upper() for s in req.symbols][: tier.scan_max_symbols]
+    key = f"{','.join(sorted(symbols))}:{req.interval}"
     cached = scan_cache.get(key)
     if cached is not None:
-        return {"results": cached, "cached": True}
+        return {"results": cached, "cached": True, "scan_max_symbols": tier.scan_max_symbols}
     from backend.signals.scanner import scan_watchlist
-    results = scan_watchlist(req.symbols, req.interval)
+    results = scan_watchlist(symbols, req.interval)
     scan_cache.set(key, results)
-    return {"results": results, "cached": False}
+    return {"results": results, "cached": False, "scan_max_symbols": tier.scan_max_symbols}
+
+
+# --- Billing -----------------------------------------------------------------
+
+@app.post("/billing/checkout")
+def billing_checkout(body: CheckoutRequest, user_id: str = Depends(current_user_id)):
+    """Create a Stripe Checkout Session for the requested tier; return its URL."""
+    tier = (body.tier or "").lower()
+    if tier not in (PRO, PREMIUM):
+        raise HTTPException(status_code=400, detail="tier must be 'pro' or 'premium'.")
+    from backend.billing import stripe_billing
+    try:
+        url = stripe_billing.create_checkout_session(user_id, tier)
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(status_code=503, detail=f"Billing unavailable: {e}") from e
+    return {"url": url}
+
+
+@app.post("/billing/portal")
+def billing_portal(user_id: str = Depends(current_user_id)):
+    """Return a Stripe billing-portal URL so the user can manage/cancel."""
+    from backend.billing import stripe_billing
+    try:
+        url = stripe_billing.create_billing_portal_session(user_id)
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(status_code=503, detail=f"Billing unavailable: {e}") from e
+    return {"url": url}
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request,
+                          stripe_signature: str | None = Header(default=None)):
+    """Stripe subscription events. Signature-verified; NOT behind user auth."""
+    payload = await request.body()
+    from backend.billing import stripe_billing
+    try:
+        event = stripe_billing.verify_and_parse_event(payload, stripe_signature or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        summary = stripe_billing.handle_event(event)
+    except Exception:  # noqa: BLE001 — never 500 to Stripe or it retries forever
+        logger.exception("stripe webhook handling failed")
+        return {"received": True, "handled": False}
+    return {"received": True, **summary}
 
 
 # --- Trade Journal -----------------------------------------------------------
-# Scoped by X-Owner-Id (client UUID). No auth yet; upgrades to user ids later.
+# Scoped to the authenticated user id.
 
 class JournalCreate(BaseModel):
     symbol: str | None = None
@@ -164,39 +259,27 @@ class JournalUpdate(BaseModel):
     notes: str | None = None
 
 
-def _owner(x_owner_id: str | None) -> str:
-    """Resolve and validate the owner id from the header."""
-    oid = (x_owner_id or "").strip()
-    if not oid or len(oid) > 128:
-        raise HTTPException(status_code=400, detail="Missing or invalid X-Owner-Id header.")
-    return oid
-
-
 @app.post("/journal", status_code=201)
-def journal_create(body: JournalCreate, x_owner_id: str | None = Header(default=None)):
-    owner = _owner(x_owner_id)
+def journal_create(body: JournalCreate, user_id: str = Depends(current_user_id)):
     try:
-        return journal_store.create_entry(owner, body.model_dump())
+        return journal_store.create_entry(user_id, body.model_dump())
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @app.get("/journal")
-def journal_list(status: str | None = None, x_owner_id: str | None = Header(default=None)):
-    owner = _owner(x_owner_id)
-    return {"entries": journal_store.list_entries(owner, status=status)}
+def journal_list(status: str | None = None, user_id: str = Depends(current_user_id)):
+    return {"entries": journal_store.list_entries(user_id, status=status)}
 
 
 @app.get("/journal/stats")
-def journal_stats(x_owner_id: str | None = Header(default=None)):
-    owner = _owner(x_owner_id)
-    return journal_store.stats(owner)
+def journal_stats(user_id: str = Depends(current_user_id)):
+    return journal_store.stats(user_id)
 
 
 @app.get("/journal/{entry_id}")
-def journal_get(entry_id: str, x_owner_id: str | None = Header(default=None)):
-    owner = _owner(x_owner_id)
-    entry = journal_store.get_entry(owner, entry_id)
+def journal_get(entry_id: str, user_id: str = Depends(current_user_id)):
+    entry = journal_store.get_entry(user_id, entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Entry not found.")
     return entry
@@ -204,11 +287,10 @@ def journal_get(entry_id: str, x_owner_id: str | None = Header(default=None)):
 
 @app.patch("/journal/{entry_id}")
 def journal_update(entry_id: str, body: JournalUpdate,
-                   x_owner_id: str | None = Header(default=None)):
-    owner = _owner(x_owner_id)
+                   user_id: str = Depends(current_user_id)):
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     try:
-        entry = journal_store.update_entry(owner, entry_id, fields)
+        entry = journal_store.update_entry(user_id, entry_id, fields)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     if entry is None:
@@ -217,8 +299,7 @@ def journal_update(entry_id: str, body: JournalUpdate,
 
 
 @app.delete("/journal/{entry_id}", status_code=204)
-def journal_delete(entry_id: str, x_owner_id: str | None = Header(default=None)):
-    owner = _owner(x_owner_id)
-    if not journal_store.delete_entry(owner, entry_id):
+def journal_delete(entry_id: str, user_id: str = Depends(current_user_id)):
+    if not journal_store.delete_entry(user_id, entry_id):
         raise HTTPException(status_code=404, detail="Entry not found.")
     return JSONResponse(status_code=204, content=None)

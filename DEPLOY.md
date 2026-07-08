@@ -89,7 +89,55 @@ Vercel gives you `https://trading-copilot.vercel.app`. Put that back into Railwa
 
 ---
 
-## 3. Verify the live demo
+## 3. Auth + Billing (Clerk + Stripe)
+
+Users sign in with **Clerk**; paid plans are billed via **Stripe**. The backend
+verifies the Clerk session JWT on every request and gates features/quotas by the
+user's tier. Everything is env-driven — no code change to go live.
+
+### 3a. Clerk (auth)
+1. Create a Clerk application at dashboard.clerk.com. Enable Email + any social logins.
+2. Copy from Clerk → **API Keys**:
+   - Publishable key (`pk_live_***`) → Vercel env `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+   - Secret key (`sk_live_***`) → Vercel env `CLERK_SECRET_KEY`
+3. From Clerk → **API Keys → Show JWKS URL** (Frontend API), set on **Railway**:
+   - `CLERK_JWKS_URL` = `https://<slug>.clerk.accounts.dev/.well-known/jwks.json`
+   - `CLERK_ISSUER`   = `https://<slug>.clerk.accounts.dev`
+   - `CLERK_AUTHORIZED_PARTIES` (optional) = your Vercel + custom domains, comma-separated
+4. Leave `AUTH_DEV_ALLOW_HEADER` unset in prod (the legacy `X-Owner-Id` fallback is dev-only).
+
+### 3b. Stripe (billing)
+1. In Stripe → **Products**, create two recurring prices: Pro ($49/mo) and Premium ($199/mo).
+   Copy each **Price ID** (`price_***`).
+2. Set on **Railway**:
+   - `STRIPE_SECRET_KEY` = `sk_live_***`
+   - `STRIPE_PRICE_PRO` = the Pro price id
+   - `STRIPE_PRICE_PREMIUM` = the Premium price id
+   - `BILLING_SUCCESS_URL`, `BILLING_CANCEL_URL`, `BILLING_PORTAL_RETURN_URL` = your frontend URLs
+3. In Stripe → **Developers → Webhooks**, add an endpoint:
+   - URL: `https://<backend>.up.railway.app/billing/webhook`
+   - Events: `checkout.session.completed`, `customer.subscription.updated`,
+     `customer.subscription.created`, `customer.subscription.deleted`
+   - Copy the **Signing secret** (`whsec_***`) → Railway `STRIPE_WEBHOOK_SECRET`
+
+### 3c. Verify
+```bash
+# Unauthenticated call is rejected:
+curl -s -o /dev/null -w "%{http_code}\n" -X POST <backend>/copilot \
+  -H 'Content-Type: application/json' -d '{"symbol":"BTCUSDT"}'   # -> 401
+```
+Then in the browser: sign up (free tier) → run analyses until the daily cap →
+the upgrade prompt appears → "Upgrade to Pro" opens Stripe Checkout → after paying,
+the webhook flips your tier and the badge updates to PRO with a higher quota.
+
+**Tier defaults** (all env-overridable in `backend/billing/__init__.py`):
+Free = 3 Copilot analyses/day, scanner capped at 5 symbols.
+Pro ($49) = 100/day, 25 symbols, journal + forex.
+Premium ($199) = unlimited, 100 symbols.
+
+---
+
+## 4. Verify the live demo
 1. Open the Vercel URL
 2. Click BTCUSDT → Analyze → see the AI verdict
 3. Try EUR/USD (forex), and the Scanner tab
@@ -133,9 +181,9 @@ gracefully to the ATR estimate — Kronos is never a hard dependency.
 ## Trade Journal (persistence)
 
 The journal lets users save Copilot analyses and track trade outcomes (status,
-entry/exit, P&L, notes) with a running win-rate. Entries are scoped by an
-`X-Owner-Id` header (a per-browser UUID); there's no auth yet, so each browser
-sees its own journal.
+entry/exit, P&L, notes) with a running win-rate. Entries are scoped to the
+**authenticated Clerk user id** (see section 3), so each signed-in user sees only
+their own journal. The journal is a paid-tier feature (Pro/Premium).
 
 Storage auto-selects at runtime:
 
@@ -156,16 +204,16 @@ Storage auto-selects at runtime:
 No volume, no migration tool, no manual schema step. The `postgres`-vs-
 `postgresql` scheme difference Railway sometimes emits is normalized in code.
 
-Endpoints (all require the `X-Owner-Id` header; the frontend sends it automatically):
+Endpoints (all require a valid Clerk JWT via `Authorization: Bearer ***; the
+frontend attaches it automatically):
 `POST /journal`, `GET /journal[?status=]`, `GET /journal/stats`,
 `GET|PATCH|DELETE /journal/{id}`.
 
-Verify after adding Postgres:
+Verify after adding Postgres (needs a real Clerk JWT — easiest to test via the
+signed-in UI; the curl below shows the shape):
 ```bash
 curl -s -X POST <backend-url>/journal -H 'Content-Type: application/json' \
-  -H 'X-Owner-Id: smoke-test' -d '{"symbol":"BTCUSDT","status":"idea"}'
-curl -s <backend-url>/journal -H 'X-Owner-Id: smoke-test'   # should list it
-# Redeploy the backend, then list again — the entry SURVIVES (proves durability).
+  -H "Authorization: *** <clerk-jwt>" -d '{"symbol":"BTCUSDT","status":"idea"}'
 ```
 
 > **Driver note:** prod uses `psycopg[binary]` (prebuilt wheel — no system libpq
