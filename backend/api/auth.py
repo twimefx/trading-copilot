@@ -44,6 +44,16 @@ CLERK_AUTHORIZED_PARTIES = [p.strip() for p in _AZP_RAW.split(",") if p.strip()]
 # Dev escape hatch: accept X-Owner-Id when no real auth is configured. OFF by default.
 AUTH_DEV_ALLOW_HEADER = os.environ.get("AUTH_DEV_ALLOW_HEADER", "0") == "1"
 
+# Auth is ENABLED only once Clerk is configured (CLERK_JWKS_URL set). Until then the
+# app degrades to its pre-auth anonymous behaviour so a deploy of this code does NOT
+# break a running production instance that hasn't been given Clerk keys yet. Flip the
+# switch simply by setting CLERK_JWKS_URL — no code change, no redeploy of new code.
+AUTH_ENABLED = bool(CLERK_JWKS_URL)
+
+# The single owner id used when auth is disabled — preserves the original single-tenant
+# anonymous flow (one shared journal/user), matching behaviour before auth existed.
+ANON_OWNER_ID = os.environ.get("ANON_OWNER_ID", "public")
+
 _LEEWAY = int(os.environ.get("CLERK_LEEWAY_SECONDS", "30"))
 
 # --- JWKS client (cached, thread-safe, lazily built) -------------------------
@@ -114,11 +124,17 @@ def current_user_id(
     """FastAPI dependency → the authenticated Clerk user id (used as owner_id).
 
     Order:
+      0. If auth is DISABLED (Clerk not configured), return the shared anonymous
+         owner id — preserves the pre-auth flow so deploying this code can't break
+         a production instance that hasn't been given Clerk keys yet.
       1. Bearer token (Clerk JWT) — the real path. Verified against JWKS.
       2. If AUTH_DEV_ALLOW_HEADER is on and no bearer present, fall back to the
          legacy X-Owner-Id header (dev/tests only).
       3. Otherwise 401.
     """
+    if not AUTH_ENABLED:
+        return ANON_OWNER_ID
+
     token = _extract_bearer(authorization)
     if token:
         claims = _verify_bearer(token)

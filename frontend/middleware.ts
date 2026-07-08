@@ -1,9 +1,12 @@
 import { clerkMiddleware } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
-// Clerk middleware runs on every request so `auth()` and the client hooks work.
-// We don't force protection at the edge here — the UI gates views and the
-// backend independently verifies the JWT — but this wires Clerk into the app.
-export default clerkMiddleware();
+// Clerk middleware only runs when Clerk is configured. Without the publishable
+// key we pass requests through untouched, so the app runs anonymously (open
+// mode) instead of the edge throwing on missing Clerk keys.
+const CLERK_ENABLED = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
+export default CLERK_ENABLED ? clerkMiddleware() : () => NextResponse.next();
 
 export const config = {
   matcher: [

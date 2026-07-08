@@ -38,6 +38,7 @@ def wire_verifier(keypair, monkeypatch):
             return _FakeSigningKey(pub)
 
     monkeypatch.setattr(auth, "_get_jwk_client", lambda: _FakeJWKClient())
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)        # exercise the real auth path
     monkeypatch.setattr(auth, "CLERK_ISSUER", "")           # skip issuer check
     monkeypatch.setattr(auth, "CLERK_AUTHORIZED_PARTIES", [])
     return keypair
@@ -63,6 +64,7 @@ def test_expired_token_rejected(wire_verifier):
 
 
 def test_missing_auth_rejected(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
     monkeypatch.setattr(auth, "AUTH_DEV_ALLOW_HEADER", False)
     with pytest.raises(auth.HTTPException) as e:
         _call()
@@ -70,11 +72,13 @@ def test_missing_auth_rejected(monkeypatch):
 
 
 def test_dev_header_fallback_when_enabled(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
     monkeypatch.setattr(auth, "AUTH_DEV_ALLOW_HEADER", True)
     assert _call(x_owner_id="legacy-owner") == "legacy-owner"
 
 
 def test_dev_header_ignored_when_disabled(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
     monkeypatch.setattr(auth, "AUTH_DEV_ALLOW_HEADER", False)
     with pytest.raises(auth.HTTPException):
         _call(x_owner_id="legacy-owner")
@@ -87,3 +91,13 @@ def test_authorized_party_enforced(wire_verifier, monkeypatch):
     with pytest.raises(auth.HTTPException) as e:
         _call(authorization=f"Bearer {token}")
     assert e.value.status_code == 401
+
+
+def test_open_mode_returns_anon_owner_when_auth_disabled(monkeypatch):
+    """When Clerk isn't configured, the API degrades to anonymous (no 401) so a
+    deploy of the auth code can't break a prod instance lacking Clerk keys."""
+    monkeypatch.setattr(auth, "AUTH_ENABLED", False)
+    monkeypatch.setattr(auth, "ANON_OWNER_ID", "public")
+    # No token, no dev header — still resolves to the shared anonymous owner.
+    assert _call() == "public"
+

@@ -127,8 +127,9 @@ def test_api_requires_auth(tmp_path, monkeypatch):
     import backend.journal.store as s
     monkeypatch.setattr(s, "DB_PATH", str(tmp_path / "noauth.db"))
     s.init_db()
-    # Ensure the dev X-Owner-Id fallback is OFF.
+    # Ensure the dev X-Owner-Id fallback is OFF and auth is ENABLED (Clerk configured).
     import backend.api.auth as auth
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
     monkeypatch.setattr(auth, "AUTH_DEV_ALLOW_HEADER", False)
     from backend.api.main import app
     app.dependency_overrides.clear()

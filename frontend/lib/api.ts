@@ -9,6 +9,21 @@
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useMemo } from "react";
 
+// Auth degrades gracefully. When Clerk isn't configured (no publishable key),
+// we skip Clerk entirely: no token is attached and the app is treated as signed
+// in anonymously — mirroring the backend, which stays open until Clerk is set.
+const CLERK_ENABLED = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
+// A no-op stand-in for Clerk's useAuth when Clerk is disabled, so useApi() can
+// call a hook unconditionally (Rules of Hooks) without a ClerkProvider present.
+function useNoAuth() {
+  return {
+    getToken: useCallback(async () => null as string | null, []),
+    isSignedIn: true as boolean | undefined,
+  };
+}
+const useAuthImpl = CLERK_ENABLED ? useAuth : useNoAuth;
+
 export type Range = { low: number | null; high: number | null; source: string | null };
 
 export type MeResponse = {
@@ -43,7 +58,7 @@ async function parseError(res: Response): Promise<ApiError> {
 }
 
 export function useApi() {
-  const { getToken, isSignedIn } = useAuth();
+  const { getToken, isSignedIn } = useAuthImpl();
 
   const authHeaders = useCallback(
     async (extra?: HeadersInit): Promise<HeadersInit> => {

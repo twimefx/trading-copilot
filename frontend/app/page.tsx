@@ -7,6 +7,10 @@ import Scanner from "@/components/Scanner";
 import Journal from "@/components/Journal";
 import { useApi, MeResponse } from "@/lib/api";
 
+// When Clerk isn't configured the app runs anonymously (no sign-in UI, no tier
+// badge) — matching the backend's open mode. Flip on by setting the Clerk keys.
+const CLERK_ENABLED = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
 type Range = { low: number | null; high: number | null; source: string };
 type Analysis = {
   lean?: string;
@@ -141,7 +145,11 @@ export default function Home() {
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {signedIn ? (
+          {!CLERK_ENABLED ? (
+            <span className="text-[11px] text-neutral/60 border border-white/10 rounded-lg px-2.5 py-1">
+              Open preview
+            </span>
+          ) : signedIn ? (
             <>
               {me && <TierBadge me={me} onUpgrade={upgrade} onManage={async () => {
                 try { window.location.href = await api.openBillingPortal(); } catch {}
@@ -163,7 +171,7 @@ export default function Home() {
         </div>
       </header>
 
-      {authReady && !signedIn && (
+      {CLERK_ENABLED && authReady && !signedIn && (
         <div className="rounded-2xl border border-white/10 bg-panel p-10 text-center">
           <h2 className="text-xl font-semibold">Sign in to run the Copilot</h2>
           <p className="text-neutral text-sm mt-2 max-w-md mx-auto">
