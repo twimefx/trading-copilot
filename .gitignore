@@ -45,3 +45,4 @@ journal.db
 vendor/Kronos/
 .venv-prod/
 .vercel
+.vercel_token
