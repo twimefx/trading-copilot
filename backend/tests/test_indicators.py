@@ -86,3 +86,53 @@ def test_price_dp_scales_with_magnitude():
     assert ind._price_dp(1.1437) == 5
     assert ind._price_dp(0.5) == 6
     assert ind._price_dp(0.0008) == 8
+
+
+# --- price_structure (grounding for price-action / chart-pattern agents) -----
+
+def _ohlc(closes):
+    """Build a simple OHLCV frame from a close path (high/low bracket the close)."""
+    closes = [float(c) for c in closes]
+    return pd.DataFrame({
+        "open": closes,
+        "high": [c * 1.002 for c in closes],
+        "low": [c * 0.998 for c in closes],
+        "close": closes,
+        "volume": [1000.0] * len(closes),
+    })
+
+
+def test_price_structure_insufficient_bars():
+    out = ind.price_structure(_ohlc([100, 101, 102]))
+    assert out["available"] is False
+
+
+def test_price_structure_uptrend_detected():
+    # Clean rising zig-zag with wide swings so fractal pivots (k=2) register:
+    # each leg is several bars up, then a few bars down, at progressively higher levels.
+    path = [100.0]
+    level = 100.0
+    for _ in range(6):
+        level += 10
+        path += [level - 6, level - 3, level, level - 2, level - 4]  # peak then pullback
+    out = ind.price_structure(_ohlc(path))
+    assert out["available"] is True
+    # Structure should register rising swings (uptrend), and levels stay ordered.
+    assert out["swing_highs"] and out["swing_lows"]
+    assert out["nearest_support"] <= out["nearest_resistance"]
+    assert 0 <= out["position_in_range_pct"] <= 100
+
+
+def test_price_structure_levels_bracket_price():
+    rng = np.random.default_rng(7)
+    closes = 50000 + np.cumsum(rng.standard_normal(80) * 50)
+    out = ind.price_structure(_ohlc(closes))
+    last = float(closes[-1])
+    # Support at/below, resistance at/above the last price.
+    assert out["nearest_support"] <= last * 1.01
+    assert out["nearest_resistance"] >= last * 0.99
+    assert isinstance(out["recent_candles"], list) and len(out["recent_candles"]) <= 12
+    # Each candle carries a direction + body pct.
+    for c in out["recent_candles"]:
+        assert c["dir"] in ("up", "down", "flat")
+        assert 0 <= c["body_pct"] <= 100

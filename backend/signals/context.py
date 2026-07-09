@@ -12,7 +12,7 @@ import os
 from dataclasses import asdict, dataclass, field
 
 from backend.data.providers import get_provider, asset_class
-from backend.data.indicators import snapshot
+from backend.data.indicators import snapshot, price_structure
 
 
 @dataclass
@@ -24,6 +24,7 @@ class MarketContext:
     funding: dict = field(default_factory=dict)
     open_interest: dict = field(default_factory=dict)
     kronos_range: dict | None = None
+    structure: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -52,6 +53,7 @@ def build_market_context(
         indicators=snapshot(df),
         funding=provider.fetch_funding_rate(symbol),
         open_interest=provider.fetch_open_interest(symbol),
+        structure=price_structure(df),
     )
     if include_kronos:
         ctx.kronos_range = _fetch_kronos_range(df)

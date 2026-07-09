@@ -108,3 +108,97 @@ def snapshot(df: pd.DataFrame) -> dict:
         "atr_pct": round(atr_val / last_close * 100, 2) if last_close else None,
         "volume_trend": round(volume_trend(df["volume"]), 3),
     }
+
+
+def _swings(highs: list[float], lows: list[float], k: int = 2) -> tuple[list[float], list[float]]:
+    """Fractal swing pivots: a bar is a swing high if its high is >= the `k` bars
+    on each side (and symmetric for lows). Deterministic, no lookahead beyond the
+    fixed window. Returns (swing_highs, swing_lows) as price levels."""
+    sh, sl = [], []
+    n = len(highs)
+    for i in range(k, n - k):
+        window_h = highs[i - k:i + k + 1]
+        window_l = lows[i - k:i + k + 1]
+        if highs[i] == max(window_h):
+            sh.append(highs[i])
+        if lows[i] == min(window_l):
+            sl.append(lows[i])
+    return sh, sl
+
+
+def price_structure(df: pd.DataFrame, lookback: int = 60, recent_bars: int = 12) -> dict:
+    """Deterministic price-action / structure summary for the reasoning layer.
+
+    Gives price-action and chart-pattern agents REAL structure to reason over
+    (swings, support/resistance, position within range, recent candles) instead
+    of a single latest-bar snapshot — so they ground claims, not hallucinate
+    patterns. Pure pandas; no LLM.
+
+    Expects columns: open, high, low, close, volume.
+    """
+    tail = df.tail(lookback).reset_index(drop=True)
+    if len(tail) < 5:
+        return {"available": False, "note": "insufficient bars for structure"}
+
+    highs = [float(x) for x in tail["high"].tolist()]
+    lows = [float(x) for x in tail["low"].tolist()]
+    closes = [float(x) for x in tail["close"].tolist()]
+    opens = [float(x) for x in tail["open"].tolist()]
+    last = closes[-1]
+
+    period_high = max(highs)
+    period_low = min(lows)
+    rng = period_high - period_low
+    # Where price sits within the lookback range: 0 = at lows, 100 = at highs.
+    pos_in_range = round((last - period_low) / rng * 100, 1) if rng else None
+
+    sh, sl = _swings(highs, lows, k=2)
+    dp = _price_dp(last)
+
+    # Nearest resistance above / support below the current price, from swing levels.
+    res_above = sorted([h for h in sh if h > last])
+    sup_below = sorted([l for l in sl if l < last], reverse=True)
+    nearest_res = round(res_above[0], dp) if res_above else round(period_high, dp)
+    nearest_sup = round(sup_below[0], dp) if sup_below else round(period_low, dp)
+
+    # Swing-structure read: compare the last two swing highs / lows for HH/HL vs LH/LL.
+    def _trend_of(levels: list[float]) -> str:
+        if len(levels) < 2:
+            return "flat"
+        return "up" if levels[-1] > levels[-2] else "down" if levels[-1] < levels[-2] else "flat"
+    sh_trend, sl_trend = _trend_of(sh), _trend_of(sl)
+    if sh_trend == "up" and sl_trend == "up":
+        structure = "uptrend (higher highs & higher lows)"
+    elif sh_trend == "down" and sl_trend == "down":
+        structure = "downtrend (lower highs & lower lows)"
+    else:
+        structure = "range/mixed structure"
+
+    # Compact recent-candle summary the pattern agent can eyeball.
+    rb = tail.tail(recent_bars)
+    recent = []
+    for o, h, l, c in zip(rb["open"], rb["high"], rb["low"], rb["close"]):
+        o, h, l, c = float(o), float(h), float(l), float(c)
+        body = c - o
+        rng_bar = h - l
+        recent.append({
+            "o": round(o, dp), "h": round(h, dp), "l": round(l, dp), "c": round(c, dp),
+            "dir": "up" if body > 0 else "down" if body < 0 else "flat",
+            "body_pct": round(abs(body) / rng_bar * 100, 1) if rng_bar else 0.0,
+        })
+
+    return {
+        "available": True,
+        "lookback_bars": len(tail),
+        "period_high": round(period_high, dp),
+        "period_low": round(period_low, dp),
+        "position_in_range_pct": pos_in_range,
+        "nearest_resistance": nearest_res,
+        "nearest_support": nearest_sup,
+        "dist_to_resistance_pct": round((nearest_res - last) / last * 100, 2) if last else None,
+        "dist_to_support_pct": round((last - nearest_sup) / last * 100, 2) if last else None,
+        "swing_highs": [round(x, dp) for x in sh[-4:]],
+        "swing_lows": [round(x, dp) for x in sl[-4:]],
+        "structure": structure,
+        "recent_candles": recent,
+    }

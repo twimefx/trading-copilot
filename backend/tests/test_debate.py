@@ -101,6 +101,10 @@ class _ScriptedRouter:
             lean = self.agent_leans.get("positioning", "neutral")
         elif "volatility and range" in sys:
             lean = self.agent_leans.get("volatility", "neutral")
+        elif "pure price-action" in sys:
+            lean = self.agent_leans.get("price_action", "neutral")
+        elif "classical chart-pattern" in sys:
+            lean = self.agent_leans.get("chart_pattern", "neutral")
         elif "devil's advocate" in sys:
             lean = self.agent_leans.get("contrarian", "neutral")
         else:
@@ -117,31 +121,35 @@ def _ctx():
                          kronos_range={"available": False})
 
 
-def test_run_panel_produces_five_cards():
-    from backend.signals.agents import run_panel
+def test_run_panel_produces_all_cards():
+    from backend.signals.agents import run_panel, AGENTS
     r = _ScriptedRouter({"trend": "bullish", "momentum": "bullish",
                          "positioning": "neutral", "volatility": "neutral",
+                         "price_action": "bullish", "chart_pattern": "neutral",
                          "contrarian": "bearish"})
     cards = run_panel(_ctx(), router=r)
-    assert len(cards) == 5
-    assert cards[-1]["agent"] == "contrarian"       # contrarian runs last
+    assert len(cards) == len(AGENTS) + 1          # all specialists + contrarian
+    assert cards[-1]["agent"] == "contrarian"     # contrarian runs last
     keys = {c["agent"] for c in cards}
-    assert keys == {"trend", "momentum", "positioning", "volatility", "contrarian"}
+    assert keys == {"trend", "momentum", "positioning", "volatility",
+                    "price_action", "chart_pattern", "contrarian"}
 
 
 def test_debate_end_to_end_bullish(monkeypatch):
     from backend.ai.router import TaskClass
+    from backend.signals.agents import AGENTS
     r = _ScriptedRouter({"trend": "bullish", "momentum": "bullish",
                          "positioning": "bullish", "volatility": "neutral",
+                         "price_action": "bullish", "chart_pattern": "bullish",
                          "contrarian": "bearish"})
     out = debate(ctx=_ctx(), router=r)
     assert out["consensus"]["lean"] == "bullish"
-    assert len(out["agents"]) == 5
+    assert len(out["agents"]) == len(AGENTS) + 1
     assert out["synthesis"]
     assert out["disclaimer"]
     # Judge routed to the premium consensus tier; agents to the cheap scan tier.
     assert TaskClass.AGENT_CONSENSUS in r.calls
-    assert r.calls.count(TaskClass.MARKET_SCAN) == 5
+    assert r.calls.count(TaskClass.MARKET_SCAN) == len(AGENTS) + 1
 
 
 def test_debate_judge_fallback_on_bad_json(monkeypatch):
