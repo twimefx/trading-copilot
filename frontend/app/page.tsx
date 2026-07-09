@@ -6,6 +6,7 @@ import TradingViewChart from "@/components/TradingViewChart";
 import Scanner from "@/components/Scanner";
 import Journal from "@/components/Journal";
 import Portfolio from "@/components/Portfolio";
+import Debate from "@/components/Debate";
 import { useApi, MeResponse } from "@/lib/api";
 
 // When Clerk isn't configured the app runs anonymously (no sign-in UI, no tier
@@ -68,7 +69,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [upgradePrompt, setUpgradePrompt] = useState(false);
   const [result, setResult] = useState<Analysis | null>(null);
-  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio">("copilot");
+  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate">("copilot");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [journalRefresh, setJournalRefresh] = useState(0);
   const [me, setMe] = useState<MeResponse | null>(null);
@@ -201,7 +202,7 @@ export default function Home() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-white/10">
-        {(["copilot", "scanner", "journal", "portfolio"] as const).map((t) => (
+        {(["copilot", "scanner", "journal", "portfolio", "debate"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setView(t)}
@@ -209,7 +210,7 @@ export default function Home() {
               view === t ? "border-accent text-white" : "border-transparent text-neutral hover:text-white"
             }`}
           >
-            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : "Portfolio"}
+            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : t === "portfolio" ? "Portfolio" : "Debate"}
           </button>
         ))}
       </div>
@@ -217,6 +218,8 @@ export default function Home() {
       {view === "journal" && <Journal api={api} refreshKey={journalRefresh} />}
 
       {view === "portfolio" && <Portfolio api={api} refreshKey={journalRefresh} />}
+
+      {view === "debate" && <Debate api={api} symbol={symbol} interval={interval} />}
 
       {view === "scanner" && (
         <Scanner

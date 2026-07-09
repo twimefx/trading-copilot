@@ -91,6 +91,8 @@ export function useApi() {
         request("/copilot", { method: "POST", body: JSON.stringify(body) }),
       scan: (body: { symbols: string[]; interval: string }) =>
         request("/scan", { method: "POST", body: JSON.stringify(body) }),
+      debate: (body: { symbol: string; interval: string; include_kronos?: boolean }) =>
+        request("/debate", { method: "POST", body: JSON.stringify(body) }),
       // Billing
       startCheckout: async (tier: "pro" | "premium") => {
         const { url } = await request<{ url: string }>("/billing/checkout", {

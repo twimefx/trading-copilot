@@ -38,6 +38,16 @@ def _clean_db():
     from backend.billing import users as user_store
     journal_store.init_db()
     user_store.init_db()
+    # Reset shared in-memory guards so per-IP rate limits and the global daily
+    # spend cap don't accumulate across tests (they're module-level singletons).
+    try:
+        from backend.api import guards
+        guards.copilot_limiter._hits.clear()
+        guards.spend_guard._spent = 0.0
+        guards.copilot_cache.clear()
+        guards.scan_cache.clear()
+    except Exception:
+        pass
     yield
 
 

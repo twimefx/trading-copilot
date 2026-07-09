@@ -5,6 +5,7 @@ Endpoints:
     GET  /me               -> current user's tier, quota, and usage (auth)
     POST /copilot          -> {symbol, interval, include_kronos} -> analysis JSON (auth + quota)
     POST /scan             -> {symbols, interval} -> rule-based watchlist screen (auth, tier-capped)
+    POST /debate           -> {symbol, interval} -> multi-agent debate + consensus (auth, Premium)
     POST /billing/checkout -> {tier} -> Stripe Checkout URL (auth)
     POST /billing/portal   -> Stripe billing-portal URL to manage/cancel (auth)
     POST /billing/webhook  -> Stripe subscription events (signature-verified, no auth)
@@ -36,7 +37,7 @@ from backend.api.guards import (
     scan_cache,
     spend_guard,
 )
-from backend.billing import PRO, PREMIUM, F_JOURNAL, get_tier as tier_config
+from backend.billing import PRO, PREMIUM, F_JOURNAL, F_DEBATE, get_tier as tier_config
 from backend.billing import users as user_store
 from backend.journal import store as journal_store
 
@@ -73,6 +74,12 @@ class ScanRequest(BaseModel):
 
 class CheckoutRequest(BaseModel):
     tier: str  # "pro" | "premium"
+
+
+class DebateRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    interval: str = "1h"
+    include_kronos: bool = True
 
 
 @app.get("/health")
@@ -418,6 +425,66 @@ def portfolio(request: Request, user_id: str = Depends(current_user_id)):
 
     spend_guard.add(float(result.get("cost_usd") or 0.0))
     portfolio_cache.set(cache_key, result)
+    return {**result, "cached": False}
+
+
+# --- Multi-Agent Debate Engine (Premium flagship) ----------------------------
+# The most expensive endpoint (a panel of LLM calls + a judge). Premium-gated,
+# with its own cache and the same rate + spend guards as the copilot.
+_DEBATE_CACHE_TTL = int(os.environ.get("DEBATE_CACHE_TTL", "600"))  # 10 min
+debate_cache = TTLCache(_DEBATE_CACHE_TTL)
+
+
+@app.post("/debate")
+def debate(req: DebateRequest, request: Request,
+           user_id: str = Depends(current_user_id)):
+    """Run the multi-agent debate panel + judge for a symbol. Premium only.
+
+    Guards: Premium gate -> cache -> per-IP rate limit -> global daily spend cap.
+    This fires several LLM calls, so the spend cap is the critical backstop.
+    """
+    tier = tier_config(user_store.get_tier(user_id))
+    if auth_mod.AUTH_ENABLED and F_DEBATE not in tier.features:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "detail": "The Multi-Agent Debate Engine is a Premium feature. Upgrade to unlock it.",
+                "tier": tier.name,
+                "upgrade": True,
+            },
+        )
+
+    sym = req.symbol.upper()
+    cache_key = f"debate:{sym}:{req.interval}:{int(req.include_kronos)}"
+    cached = debate_cache.get(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
+    allowed, retry = copilot_limiter.allow(client_key(request))
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": str(retry)},
+            content={"detail": f"Rate limit reached. Try again in ~{retry // 60 + 1} min."},
+        )
+    if not spend_guard.check():
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Daily analysis budget reached. Resets at 00:00 UTC."},
+        )
+
+    from backend.signals.debate import debate as run_debate
+    try:
+        result = run_debate(sym, req.interval, include_kronos=req.include_kronos)
+    except RuntimeError as e:
+        logger.exception("debate config error")
+        raise HTTPException(status_code=503, detail=f"Debate unavailable: {e}") from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("debate failed")
+        raise HTTPException(status_code=500, detail=f"Debate error: {type(e).__name__}: {e}") from e
+
+    spend_guard.add(float(result.get("cost_usd") or 0.0))
+    debate_cache.set(cache_key, result)
     return {**result, "cached": False}
 
 
