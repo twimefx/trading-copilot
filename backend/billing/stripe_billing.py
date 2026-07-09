@@ -61,10 +61,10 @@ def create_checkout_session(user_id: str, tier: str) -> str:
         user_store.link_stripe_customer(user_id, customer_id)
 
     success_url = os.environ.get(
-        "BILLING_SUCCESS_URL", "https://trading-copilot-opal.vercel.app/?upgraded=1"
+        "BILLING_SUCCESS_URL", "https://twimetrade.app/?upgraded=1"
     )
     cancel_url = os.environ.get(
-        "BILLING_CANCEL_URL", "https://trading-copilot-opal.vercel.app/?upgrade=cancelled"
+        "BILLING_CANCEL_URL", "https://twimetrade.app/?upgrade=cancelled"
     )
     session = stripe.checkout.Session.create(
         mode="subscription",
@@ -87,7 +87,7 @@ def create_billing_portal_session(user_id: str) -> str:
     if not customer_id:
         raise ValueError("no Stripe customer for this user")
     return_url = os.environ.get(
-        "BILLING_PORTAL_RETURN_URL", "https://trading-copilot-opal.vercel.app/"
+        "BILLING_PORTAL_RETURN_URL", "https://twimetrade.app/"
     )
     session = stripe.billing_portal.Session.create(
         customer=customer_id, return_url=return_url
