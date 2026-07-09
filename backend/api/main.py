@@ -6,6 +6,7 @@ Endpoints:
     POST /copilot          -> {symbol, interval, include_kronos} -> analysis JSON (auth + quota)
     POST /scan             -> {symbols, interval} -> rule-based watchlist screen (auth, tier-capped)
     POST /debate           -> {symbol, interval} -> multi-agent debate + consensus (auth, Premium)
+    GET  /flow             -> ?symbol&period -> institutional flow dashboard (auth, Premium)
     POST /billing/checkout -> {tier} -> Stripe Checkout URL (auth)
     POST /billing/portal   -> Stripe billing-portal URL to manage/cancel (auth)
     POST /billing/webhook  -> Stripe subscription events (signature-verified, no auth)
@@ -37,7 +38,7 @@ from backend.api.guards import (
     scan_cache,
     spend_guard,
 )
-from backend.billing import PRO, PREMIUM, F_JOURNAL, F_DEBATE, get_tier as tier_config
+from backend.billing import PRO, PREMIUM, F_JOURNAL, F_DEBATE, F_FLOW, get_tier as tier_config
 from backend.billing import users as user_store
 from backend.journal import store as journal_store
 
@@ -485,6 +486,56 @@ def debate(req: DebateRequest, request: Request,
 
     spend_guard.add(float(result.get("cost_usd") or 0.0))
     debate_cache.set(cache_key, result)
+    return {**result, "cached": False}
+
+
+# --- Institutional Flow Dashboard (Premium) ----------------------------------
+# Derivatives positioning/flow intelligence. Data fetch is free; one cheap LLM
+# call narrates it. Premium-gated with its own cache + the shared guards.
+_FLOW_CACHE_TTL = int(os.environ.get("FLOW_CACHE_TTL", "300"))  # 5 min
+flow_cache = TTLCache(_FLOW_CACHE_TTL)
+
+
+@app.get("/flow")
+def flow(request: Request, symbol: str = "BTCUSDT", period: str = "1h",
+         user_id: str = Depends(current_user_id)):
+    """Institutional flow dashboard (funding/OI/L-S ratio/taker flow). Premium only."""
+    tier = tier_config(user_store.get_tier(user_id))
+    if auth_mod.AUTH_ENABLED and F_FLOW not in tier.features:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "detail": "The Institutional Flow Dashboard is a Premium feature. Upgrade to unlock it.",
+                "tier": tier.name,
+                "upgrade": True,
+            },
+        )
+
+    sym = symbol.upper()
+    cache_key = f"flow:{sym}:{period}"
+    cached = flow_cache.get(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
+    allowed, retry = copilot_limiter.allow(client_key(request))
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": str(retry)},
+            content={"detail": f"Rate limit reached. Try again in ~{retry // 60 + 1} min."},
+        )
+    # Narrate only if under the spend cap; otherwise still return the (free) data.
+    want_narrative = spend_guard.check()
+
+    from backend.signals.flow import institutional_flow
+    try:
+        result = institutional_flow(sym, period=period, narrative=want_narrative)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("flow failed")
+        raise HTTPException(status_code=500, detail=f"Flow error: {type(e).__name__}: {e}") from e
+
+    spend_guard.add(float(result.get("cost_usd") or 0.0))
+    flow_cache.set(cache_key, result)
     return {**result, "cached": False}
 
 

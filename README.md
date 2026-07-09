@@ -14,7 +14,8 @@
 | Market Scanner (rule-based screen) | ✅ live |
 | Trade Journal + AI behavioral coaching | ✅ live |
 | Portfolio Copilot (open-book risk read) | ✅ live |
-| Multi-Agent Debate Engine (5 agents + judge, consensus vote) | ✅ live (Premium) |
+| Multi-Agent Debate Engine (7 agents + judge, consensus vote) | ✅ live (Premium) |
+| Institutional Flow Dashboard (funding/OI/L-S/taker flow) | ✅ live (Premium) |
 | Clerk auth + Stripe billing + tier quotas | ✅ auth live; Stripe pending products |
 | Monorepo scaffold | ✅ |
 

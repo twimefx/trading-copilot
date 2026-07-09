@@ -25,6 +25,11 @@ _FUTURES_BASE = os.environ.get("BINANCE_FUTURES_BASE", "https://fapi.binance.com
 FUTURES_FUNDING = f"{_FUTURES_BASE}/fapi/v1/fundingRate"
 FUTURES_OI = f"{_FUTURES_BASE}/fapi/v1/openInterest"
 FUTURES_PREMIUM = f"{_FUTURES_BASE}/fapi/v1/premiumIndex"
+# Futures "data" endpoints — historical positioning/flow stats (free, no key).
+# Same host; may 451 on blocked IPs but all callers degrade gracefully.
+FUTURES_OI_HIST = f"{_FUTURES_BASE}/futures/data/openInterestHist"
+FUTURES_LS_ACCOUNT = f"{_FUTURES_BASE}/futures/data/globalLongShortAccountRatio"
+FUTURES_TAKER_RATIO = f"{_FUTURES_BASE}/futures/data/takerlongshortRatio"
 
 # Binance returns max 1000 candles per request.
 _MAX_LIMIT = 1000
@@ -93,6 +98,68 @@ def fetch_open_interest(symbol: str = "BTCUSDT") -> dict:
         return {"open_interest": float(data["openInterest"]), "available": True}
     except Exception as e:  # noqa: BLE001
         return {"open_interest": None, "available": False, "error": str(e)[:120]}
+
+
+def fetch_funding_history(symbol: str = "BTCUSDT", limit: int = 30) -> dict:
+    """Recent funding-rate history — shows whether crowding is building or fading."""
+    try:
+        data = _get_json(f"{FUTURES_FUNDING}?symbol={symbol}&limit={int(limit)}")
+        series = [
+            {"time": int(d["fundingTime"]), "rate": float(d["fundingRate"])}
+            for d in data
+        ]
+        return {"series": series, "available": True}
+    except Exception as e:  # noqa: BLE001
+        return {"series": [], "available": False, "error": str(e)[:120]}
+
+
+def fetch_oi_history(symbol: str = "BTCUSDT", period: str = "1h", limit: int = 30) -> dict:
+    """Open-interest history — building OI = fresh positioning, falling = unwinding."""
+    try:
+        data = _get_json(
+            f"{FUTURES_OI_HIST}?symbol={symbol}&period={period}&limit={int(limit)}"
+        )
+        series = [
+            {"time": int(d["timestamp"]),
+             "oi": float(d["sumOpenInterest"]),
+             "oi_value": float(d["sumOpenInterestValue"])}
+            for d in data
+        ]
+        return {"series": series, "available": True}
+    except Exception as e:  # noqa: BLE001
+        return {"series": [], "available": False, "error": str(e)[:120]}
+
+
+def fetch_long_short_ratio(symbol: str = "BTCUSDT", period: str = "1h", limit: int = 30) -> dict:
+    """Global long/short ACCOUNT ratio — retail crowd positioning (>1 = more longs)."""
+    try:
+        data = _get_json(
+            f"{FUTURES_LS_ACCOUNT}?symbol={symbol}&period={period}&limit={int(limit)}"
+        )
+        series = [
+            {"time": int(d["timestamp"]), "ratio": float(d["longShortRatio"]),
+             "long_pct": float(d["longAccount"]), "short_pct": float(d["shortAccount"])}
+            for d in data
+        ]
+        return {"series": series, "available": True}
+    except Exception as e:  # noqa: BLE001
+        return {"series": [], "available": False, "error": str(e)[:120]}
+
+
+def fetch_taker_ratio(symbol: str = "BTCUSDT", period: str = "1h", limit: int = 30) -> dict:
+    """Taker buy/sell volume ratio — aggressive market-order flow (>1 = buyers lifting)."""
+    try:
+        data = _get_json(
+            f"{FUTURES_TAKER_RATIO}?symbol={symbol}&period={period}&limit={int(limit)}"
+        )
+        series = [
+            {"time": int(d["timestamp"]), "ratio": float(d["buySellRatio"]),
+             "buy_vol": float(d["buyVol"]), "sell_vol": float(d["sellVol"])}
+            for d in data
+        ]
+        return {"series": series, "available": True}
+    except Exception as e:  # noqa: BLE001
+        return {"series": [], "available": False, "error": str(e)[:120]}
 
 
 if __name__ == "__main__":
