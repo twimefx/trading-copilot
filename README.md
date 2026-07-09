@@ -3,13 +3,18 @@
 > AI intelligence terminal for retail traders. **Crypto + Forex** (MVP), stocks later.
 > The product is market *intelligence, explainability, and coaching* — signals are assistive, **not** guaranteed. Not financial advice.
 
-## Status: Phase 0 — Foundation ✅ (in progress)
+## Status: Phase 2 — Retention (in progress)
 
 | Component | Status |
 |---|---|
 | Kronos forecasting (real BTC, end-to-end) | ✅ validated locally |
 | Binance OHLCV ingestion | ✅ working |
-| LLM model router (cost-routed, swappable) | ✅ skeleton (awaiting valid Claude key) |
+| LLM model router (multi-provider, cost-routed) | ✅ Claude + OpenAI + DeepSeek |
+| AI Market Copilot | ✅ live |
+| Market Scanner (rule-based screen) | ✅ live |
+| Trade Journal + AI behavioral coaching | ✅ live |
+| Portfolio Copilot (open-book risk read) | ✅ live |
+| Clerk auth + Stripe billing + tier quotas | ✅ auth live; Stripe pending products |
 | Monorepo scaffold | ✅ |
 
 ## Architecture

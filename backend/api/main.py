@@ -10,6 +10,7 @@ Endpoints:
     POST /billing/webhook  -> Stripe subscription events (signature-verified, no auth)
     /journal*              -> Trade Journal CRUD, scoped to the authenticated user
     GET  /journal/coaching -> AI behavioral coaching over own closed trades (auth, Pro)
+    GET  /portfolio        -> AI risk read over own open positions (auth, Pro)
 
 Identity: a Clerk session JWT (Authorization: Bearer ***) is verified and its
 `sub` becomes the owner/user id everything is scoped by. In dev/tests, when
@@ -351,6 +352,72 @@ def journal_coaching(request: Request, user_id: str = Depends(current_user_id)):
 
     spend_guard.add(float(result.get("cost_usd") or 0.0))
     coaching_cache.set(cache_key, result)
+    return {**result, "cached": False}
+
+
+# --- Portfolio Copilot -------------------------------------------------------
+# Portfolio-level risk read over the user's OPEN journal positions. Same guards
+# and Pro gate as coaching; the LLM read is grounded on a deterministic profile.
+_PORTFOLIO_CACHE_TTL = int(os.environ.get("PORTFOLIO_CACHE_TTL", "180"))  # 3 min
+portfolio_cache = TTLCache(_PORTFOLIO_CACHE_TTL)
+
+
+@app.get("/portfolio")
+def portfolio(request: Request, user_id: str = Depends(current_user_id)):
+    """AI risk read over the user's open positions (from the journal).
+
+    Pro perk (F_JOURNAL). Guards: per-user cache -> per-IP rate limit -> global
+    daily spend cap (only when positions exist and the LLM actually runs).
+    Returns an honest 'no open positions' with no LLM call when the book is empty.
+    """
+    tier = tier_config(user_store.get_tier(user_id))
+    if auth_mod.AUTH_ENABLED and F_JOURNAL not in tier.features:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "detail": "Portfolio Copilot is a Pro feature. Upgrade to unlock it.",
+                "tier": tier.name,
+                "upgrade": True,
+            },
+        )
+
+    open_entries = journal_store.list_entries(user_id, status="open")
+
+    # Cache key varies with the open set size + their ids so re-marks refresh
+    # when the book changes, but repeat views within the TTL are free.
+    ids_sig = ",".join(sorted(e.get("id", "") for e in open_entries))
+    cache_key = f"port:{user_id}:{len(open_entries)}:{hash(ids_sig)}"
+    cached = portfolio_cache.get(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
+    from backend.signals.portfolio import portfolio_copilot
+
+    if open_entries:
+        allowed, retry = copilot_limiter.allow(client_key(request))
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": str(retry)},
+                content={"detail": f"Rate limit reached. Try again in ~{retry // 60 + 1} min."},
+            )
+        if not spend_guard.check():
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Daily analysis budget reached. Resets at 00:00 UTC."},
+            )
+
+    try:
+        result = portfolio_copilot(open_entries)
+    except RuntimeError as e:
+        logger.exception("portfolio config error")
+        raise HTTPException(status_code=503, detail=f"Portfolio Copilot unavailable: {e}") from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("portfolio failed")
+        raise HTTPException(status_code=500, detail=f"Portfolio error: {type(e).__name__}: {e}") from e
+
+    spend_guard.add(float(result.get("cost_usd") or 0.0))
+    portfolio_cache.set(cache_key, result)
     return {**result, "cached": False}
 
 
