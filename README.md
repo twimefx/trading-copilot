@@ -16,6 +16,7 @@
 | Portfolio Copilot (open-book risk read) | ✅ live |
 | Multi-Agent Debate Engine (7 agents + judge, consensus vote) | ✅ live (Premium) |
 | Institutional Flow Dashboard (funding/OI/L-S/taker flow) | ✅ live (Premium) |
+| AI Strategy Builder (NL → rules → real backtest) | ✅ live (Premium) |
 | Clerk auth + Stripe billing + tier quotas | ✅ auth live; Stripe pending products |
 | Monorepo scaffold | ✅ |
 

@@ -48,6 +48,7 @@ F_JOURNAL = "journal"
 F_FOREX = "forex"          # forex/metals symbols (Oanda) — a paid perk
 F_DEBATE = "debate"        # multi-agent debate engine — Premium flagship
 F_FLOW = "flow"            # institutional flow dashboard — Premium
+F_STRATEGY = "strategy"    # AI strategy builder + backtest — Premium
 
 TIERS: dict[str, Tier] = {
     FREE: Tier(
@@ -69,7 +70,7 @@ TIERS: dict[str, Tier] = {
         price_usd=_int("PREMIUM_PRICE_USD", 199),
         daily_copilot_quota=_int("PREMIUM_DAILY_COPILOT_QUOTA", -1),
         scan_max_symbols=_int("PREMIUM_SCAN_MAX_SYMBOLS", 100),
-        features=frozenset({F_COPILOT, F_SCANNER, F_JOURNAL, F_FOREX, F_DEBATE, F_FLOW}),
+        features=frozenset({F_COPILOT, F_SCANNER, F_JOURNAL, F_FOREX, F_DEBATE, F_FLOW, F_STRATEGY}),
     ),
 }
 

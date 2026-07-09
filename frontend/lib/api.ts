@@ -95,6 +95,8 @@ export function useApi() {
         request("/debate", { method: "POST", body: JSON.stringify(body) }),
       flow: (symbol: string, period = "1h") =>
         request(`/flow?symbol=${encodeURIComponent(symbol)}&period=${encodeURIComponent(period)}`),
+      strategy: (body: { prompt: string; symbol: string; interval: string }) =>
+        request("/strategy", { method: "POST", body: JSON.stringify(body) }),
       // Billing
       startCheckout: async (tier: "pro" | "premium") => {
         const { url } = await request<{ url: string }>("/billing/checkout", {

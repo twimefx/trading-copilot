@@ -7,6 +7,7 @@ Endpoints:
     POST /scan             -> {symbols, interval} -> rule-based watchlist screen (auth, tier-capped)
     POST /debate           -> {symbol, interval} -> multi-agent debate + consensus (auth, Premium)
     GET  /flow             -> ?symbol&period -> institutional flow dashboard (auth, Premium)
+    POST /strategy         -> {prompt, symbol, interval} -> NL strategy + backtest (auth, Premium)
     POST /billing/checkout -> {tier} -> Stripe Checkout URL (auth)
     POST /billing/portal   -> Stripe billing-portal URL to manage/cancel (auth)
     POST /billing/webhook  -> Stripe subscription events (signature-verified, no auth)
@@ -38,7 +39,7 @@ from backend.api.guards import (
     scan_cache,
     spend_guard,
 )
-from backend.billing import PRO, PREMIUM, F_JOURNAL, F_DEBATE, F_FLOW, get_tier as tier_config
+from backend.billing import PRO, PREMIUM, F_JOURNAL, F_DEBATE, F_FLOW, F_STRATEGY, get_tier as tier_config
 from backend.billing import users as user_store
 from backend.journal import store as journal_store
 
@@ -81,6 +82,12 @@ class DebateRequest(BaseModel):
     symbol: str = "BTCUSDT"
     interval: str = "1h"
     include_kronos: bool = True
+
+
+class StrategyRequest(BaseModel):
+    prompt: str
+    symbol: str = "BTCUSDT"
+    interval: str = "1h"
 
 
 @app.get("/health")
@@ -536,6 +543,74 @@ def flow(request: Request, symbol: str = "BTCUSDT", period: str = "1h",
 
     spend_guard.add(float(result.get("cost_usd") or 0.0))
     flow_cache.set(cache_key, result)
+    return {**result, "cached": False}
+
+
+# --- AI Strategy Builder (Premium) -------------------------------------------
+# NL -> validated rule-spec (LLM) -> deterministic backtest (pure code). The
+# backtest is never LLM-produced. Premium-gated with cache + guards.
+_STRATEGY_CACHE_TTL = int(os.environ.get("STRATEGY_CACHE_TTL", "600"))  # 10 min
+strategy_cache = TTLCache(_STRATEGY_CACHE_TTL)
+
+
+@app.post("/strategy")
+def strategy(req: StrategyRequest, request: Request,
+             user_id: str = Depends(current_user_id)):
+    """Turn a plain-English strategy idea into a validated rule-spec + real backtest."""
+    tier = tier_config(user_store.get_tier(user_id))
+    if auth_mod.AUTH_ENABLED and F_STRATEGY not in tier.features:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "detail": "The AI Strategy Builder is a Premium feature. Upgrade to unlock it.",
+                "tier": tier.name,
+                "upgrade": True,
+            },
+        )
+
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="prompt is required")
+    if len(prompt) > 1000:
+        raise HTTPException(status_code=422, detail="prompt too long (max 1000 chars)")
+
+    sym = req.symbol.upper()
+    cache_key = f"strategy:{sym}:{req.interval}:{prompt.lower()}"
+    cached = strategy_cache.get(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
+    allowed, retry = copilot_limiter.allow(client_key(request))
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": str(retry)},
+            content={"detail": f"Rate limit reached. Try again in ~{retry // 60 + 1} min."},
+        )
+    if not spend_guard.check():
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Daily analysis budget reached. Resets at 00:00 UTC."},
+        )
+
+    from backend.signals.strategy import build_strategy, SpecError
+    try:
+        result = build_strategy(prompt, sym, req.interval)
+    except SpecError as e:
+        # The model produced an invalid/unsupported spec — user-facing, not a 500.
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not build a valid strategy from that description: {e}",
+        ) from e
+    except RuntimeError as e:
+        logger.exception("strategy config error")
+        raise HTTPException(status_code=503, detail=f"Strategy builder unavailable: {e}") from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("strategy failed")
+        raise HTTPException(status_code=500, detail=f"Strategy error: {type(e).__name__}: {e}") from e
+
+    spend_guard.add(float(result.get("cost_usd") or 0.0))
+    strategy_cache.set(cache_key, result)
     return {**result, "cached": False}
 
 
