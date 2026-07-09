@@ -17,7 +17,8 @@
 | Multi-Agent Debate Engine (7 agents + judge, consensus vote) | ✅ live (Premium) |
 | Institutional Flow Dashboard (funding/OI/L-S/taker flow) | ✅ live (Premium) |
 | AI Strategy Builder (NL → rules → real backtest) | ✅ live (Premium) |
-| Clerk auth + Stripe billing + tier quotas | ✅ auth live; Stripe pending products |
+| Forex (Oanda): Copilot/Debate/Strategy parity + retail position-book flow | ✅ live |
+| Clerk auth + Stripe billing + tier quotas | ✅ auth live; Stripe test mode |
 | Monorepo scaffold | ✅ |
 
 ## Architecture

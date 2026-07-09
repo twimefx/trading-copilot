@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 
 import pandas as pd
@@ -79,6 +80,75 @@ def fetch_funding_rate(symbol: str = "EUR_USD") -> dict:
 def fetch_open_interest(symbol: str = "EUR_USD") -> dict:
     """Spot FX has no centralized open interest. Return unavailable."""
     return {"open_interest": None, "available": False, "note": "n/a for spot forex"}
+
+
+# Curated forex universe for the scanner / symbol pickers: majors, key crosses,
+# and metals. Oanda underscore form. Kept small and liquid on purpose.
+FOREX_MAJORS = ["EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD", "USD_CAD", "NZD_USD"]
+FOREX_CROSSES = ["EUR_GBP", "EUR_JPY", "GBP_JPY", "AUD_JPY", "EUR_AUD"]
+FOREX_METALS = ["XAU_USD", "XAG_USD"]
+FOREX_UNIVERSE = FOREX_MAJORS + FOREX_CROSSES + FOREX_METALS
+
+
+def fetch_position_book(symbol: str = "EUR_USD") -> dict:
+    """Retail positioning from Oanda's position book (long/short % across price buckets).
+
+    This is the forex analog of a crypto exchange's long/short ratio — it shows
+    where the retail crowd is positioned and where they're offside relative to price.
+
+    NOTE: this endpoint requires a token with trading-account authorization. If the
+    token lacks it (HTTP 401) or the instrument has no book, we degrade gracefully to
+    {available: False} — the flow dashboard still works from price/volatility data,
+    and this section lights up automatically once a book-scoped token is supplied.
+    """
+    instrument = normalize_instrument(symbol)
+    url = f"{_base_url()}/v3/instruments/{instrument}/positionBook"
+    try:
+        req = urllib.request.Request(url, headers=_headers())
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:  # 401 (no book scope), 404, etc.
+        return {"available": False, "note": f"position book unavailable (HTTP {e.code})"}
+    except Exception as e:  # noqa: BLE001
+        return {"available": False, "note": f"position book error: {str(e)[:80]}"}
+
+    pb = data.get("positionBook") or {}
+    buckets = pb.get("buckets") or []
+    if not buckets:
+        return {"available": False, "note": "empty position book"}
+
+    price = float(pb.get("price") or 0) or None
+    long_pct = sum(float(b.get("longCountPercent", 0)) for b in buckets)
+    short_pct = sum(float(b.get("shortCountPercent", 0)) for b in buckets)
+    total = long_pct + short_pct
+    # Normalize to a clean long/short split + a ratio comparable to crypto L/S.
+    long_share = round(long_pct / total, 4) if total else None
+    ratio = round(long_pct / short_pct, 3) if short_pct else None
+
+    # How much of the crowd is offside (positioned the wrong side of current price):
+    # longs below price are in profit, longs above price are underwater, etc.
+    longs_underwater = shorts_underwater = 0.0
+    if price is not None:
+        for b in buckets:
+            bp = float(b.get("price", 0))
+            lp = float(b.get("longCountPercent", 0))
+            sp = float(b.get("shortCountPercent", 0))
+            if bp > price:      # entries above current price
+                longs_underwater += lp   # longs entered higher -> underwater
+            elif bp < price:    # entries below current price
+                shorts_underwater += sp  # shorts entered lower -> underwater
+
+    return {
+        "available": True,
+        "price": price,
+        "time": pb.get("time"),
+        "long_pct": round(long_pct, 2),
+        "short_pct": round(short_pct, 2),
+        "long_share": long_share,
+        "ratio": ratio,
+        "longs_underwater_pct": round(longs_underwater, 2),
+        "shorts_underwater_pct": round(shorts_underwater, 2),
+    }
 
 
 if __name__ == "__main__":

@@ -9,12 +9,14 @@ type Stream = { available: boolean; [k: string]: any };
 type FlowResult = {
   symbol: string;
   period: string;
+  asset_class?: string;
   available: boolean;
   message?: string;
-  funding: Stream;
-  open_interest: Stream;
-  long_short: Stream;
-  taker_flow: Stream;
+  funding?: Stream;
+  open_interest?: Stream;
+  long_short?: Stream;
+  taker_flow?: Stream;
+  position_book?: Stream;          // forex: retail positioning
   positioning: { signals: string[]; squeeze_risk: string | null };
   narrative?: { headline?: string; key_points?: string[]; squeeze_watch?: string } | null;
   disclaimer?: string;
@@ -115,48 +117,85 @@ export default function Flow({ api, symbol, period }: { api: Api; symbol: string
             </div>
           )}
 
-          {/* Stream cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <FlowCard title="Funding" available={data.funding.available}>
-              {data.funding.available && (
-                <>
-                  <Big className={regimeColor(data.funding.regime)}>{data.funding.latest_pct}%</Big>
-                  <Sub>{trendIcon(data.funding.trend)} {String(data.funding.regime || "").replace(/_/g, " ")}</Sub>
-                </>
-              )}
-            </FlowCard>
+          {/* Stream cards — crypto (perp derivatives) */}
+          {data.funding && (() => {
+            const funding = data.funding!;
+            const oi = data.open_interest || { available: false } as Stream;
+            const ls = data.long_short || { available: false } as Stream;
+            const taker = data.taker_flow || { available: false } as Stream;
+            return (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <FlowCard title="Funding" available={!!funding.available}>
+                {funding.available && (
+                  <>
+                    <Big className={regimeColor(funding.regime)}>{funding.latest_pct}%</Big>
+                    <Sub>{trendIcon(funding.trend)} {String(funding.regime || "").replace(/_/g, " ")}</Sub>
+                  </>
+                )}
+              </FlowCard>
 
-            <FlowCard title="Open Interest" available={data.open_interest.available}>
-              {data.open_interest.available && (
-                <>
-                  <Big className={data.open_interest.trend === "rising" ? "text-bull" : data.open_interest.trend === "falling" ? "text-bear" : ""}>
-                    {trendIcon(data.open_interest.trend)}
-                  </Big>
-                  <Sub>{data.open_interest.change_pct != null ? `${data.open_interest.change_pct}%` : ""} {data.open_interest.trend}</Sub>
-                </>
-              )}
-            </FlowCard>
+              <FlowCard title="Open Interest" available={!!oi.available}>
+                {oi.available && (
+                  <>
+                    <Big className={oi.trend === "rising" ? "text-bull" : oi.trend === "falling" ? "text-bear" : ""}>
+                      {trendIcon(oi.trend)}
+                    </Big>
+                    <Sub>{oi.change_pct != null ? `${oi.change_pct}%` : ""} {oi.trend}</Sub>
+                  </>
+                )}
+              </FlowCard>
 
-            <FlowCard title="Retail L/S" available={data.long_short.available}>
-              {data.long_short.available && (
-                <>
-                  <Big className={regimeColor(data.long_short.regime)}>{data.long_short.ratio}</Big>
-                  <Sub>{data.long_short.long_pct}% long · {data.long_short.short_pct}% short</Sub>
-                </>
-              )}
-            </FlowCard>
+              <FlowCard title="Retail L/S" available={!!ls.available}>
+                {ls.available && (
+                  <>
+                    <Big className={regimeColor(ls.regime)}>{ls.ratio}</Big>
+                    <Sub>{ls.long_pct}% long · {ls.short_pct}% short</Sub>
+                  </>
+                )}
+              </FlowCard>
 
-            <FlowCard title="Taker Flow" available={data.taker_flow.available}>
-              {data.taker_flow.available && (
-                <>
-                  <Big className={data.taker_flow.flow === "buyers_aggressive" ? "text-bull" : data.taker_flow.flow === "sellers_aggressive" ? "text-bear" : ""}>
-                    {data.taker_flow.latest_ratio}
-                  </Big>
-                  <Sub>{String(data.taker_flow.flow || "").replace(/_/g, " ")}</Sub>
-                </>
-              )}
-            </FlowCard>
-          </div>
+              <FlowCard title="Taker Flow" available={!!taker.available}>
+                {taker.available && (
+                  <>
+                    <Big className={taker.flow === "buyers_aggressive" ? "text-bull" : taker.flow === "sellers_aggressive" ? "text-bear" : ""}>
+                      {taker.latest_ratio}
+                    </Big>
+                    <Sub>{String(taker.flow || "").replace(/_/g, " ")}</Sub>
+                  </>
+                )}
+              </FlowCard>
+            </div>
+            );
+          })()}
+
+          {/* Stream cards — forex (retail position book) */}
+          {data.position_book && data.position_book.available && (() => {
+            const pb = data.position_book!;
+            return (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <FlowCard title="Retail Positioning" available={true}>
+                <Big className={regimeColor(pb.regime)}>{pb.long_pct}% long</Big>
+                <Sub>{String(pb.regime || "").replace(/_/g, " ")}</Sub>
+              </FlowCard>
+              <FlowCard title="Long / Short" available={true}>
+                <Big>{pb.ratio ?? "—"}</Big>
+                <Sub>{pb.long_pct}% L · {pb.short_pct}% S</Sub>
+              </FlowCard>
+              <FlowCard title="Longs Underwater" available={pb.longs_underwater_pct != null}>
+                <Big className={(pb.longs_underwater_pct || 0) >= 30 ? "text-bear" : ""}>
+                  {pb.longs_underwater_pct}%
+                </Big>
+                <Sub>entered above price</Sub>
+              </FlowCard>
+              <FlowCard title="Shorts Underwater" available={pb.shorts_underwater_pct != null}>
+                <Big className={(pb.shorts_underwater_pct || 0) >= 30 ? "text-bull" : ""}>
+                  {pb.shorts_underwater_pct}%
+                </Big>
+                <Sub>entered below price</Sub>
+              </FlowCard>
+            </div>
+            );
+          })()}
 
           {/* Deterministic positioning signals */}
           {data.positioning?.signals?.length > 0 && (

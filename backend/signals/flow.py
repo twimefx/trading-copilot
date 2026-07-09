@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 
 from backend.ai.router import AIRouter, TaskClass
-from backend.data import binance
+from backend.data import binance, oanda
 from backend.data.providers import asset_class
 
 FLOW_DISCLAIMER = (
@@ -208,21 +208,135 @@ def _strip_fences(text: str) -> str:
     return t
 
 
+# --- forex positioning (Oanda position book) --------------------------------
+
+def _interpret_position_book(pb: dict) -> dict:
+    """Interpret Oanda retail position-book data into a positioning read."""
+    if not pb.get("available"):
+        return {"available": False, "note": pb.get("note")}
+    long_share = pb.get("long_share")
+    ratio = pb.get("ratio")
+    if long_share is None:
+        return {"available": False, "note": "no positioning split"}
+    long_pct100 = round(long_share * 100, 1)
+    if long_share >= 0.65:
+        regime = "retail_heavily_long"
+    elif long_share >= 0.55:
+        regime = "retail_long"
+    elif long_share <= 0.35:
+        regime = "retail_heavily_short"
+    elif long_share <= 0.45:
+        regime = "retail_short"
+    else:
+        regime = "retail_balanced"
+    return {
+        "available": True,
+        "long_pct": long_pct100,
+        "short_pct": round(100 - long_pct100, 1),
+        "ratio": ratio,
+        "longs_underwater_pct": pb.get("longs_underwater_pct"),
+        "shorts_underwater_pct": pb.get("shorts_underwater_pct"),
+        "regime": regime,
+        "note": {
+            "retail_heavily_long": "Retail is heavily long — contrarian caution; crowded longs unwind hard.",
+            "retail_long": "Retail leans long.",
+            "retail_heavily_short": "Retail is heavily short — contrarian caution on a squeeze higher.",
+            "retail_short": "Retail leans short.",
+            "retail_balanced": "Retail positioning is balanced — no crowd extreme.",
+        }[regime],
+    }
+
+
+def _forex_positioning_summary(book: dict) -> dict:
+    signals: list[str] = []
+    squeeze_risk = None
+    if book.get("available"):
+        if book["regime"] == "retail_heavily_long":
+            signals.append(book["note"])
+            squeeze_risk = "downside (crowded-long unwind)"
+        elif book["regime"] == "retail_heavily_short":
+            signals.append(book["note"])
+            squeeze_risk = "upside (short squeeze)"
+        uw = book.get("longs_underwater_pct") or 0
+        sw = book.get("shorts_underwater_pct") or 0
+        if uw >= 30:
+            signals.append(f"{uw}% of longs are underwater — trapped buyers may capitulate.")
+        if sw >= 30:
+            signals.append(f"{sw}% of shorts are underwater — trapped sellers may cover.")
+    return {"signals": signals, "squeeze_risk": squeeze_risk}
+
+
+def _forex_flow(sym: str, period: str, narrative: bool,
+                router: AIRouter | None, fetchers: dict | None) -> dict:
+    """Institutional flow for spot forex — retail positioning via Oanda position book.
+
+    Spot FX has no perp funding/OI, so the crypto streams don't apply. The forex
+    equivalent is retail crowd positioning (Oanda position book). If the token
+    lacks book access it degrades to available=False (structure/vol still cover it
+    in the Copilot). Same honesty contract as the crypto path.
+    """
+    f = fetchers or {"book": oanda.fetch_position_book(sym)}
+    book = _interpret_position_book(f["book"])
+    summary = _forex_positioning_summary(book)
+    any_available = bool(book.get("available"))
+
+    result = {
+        "symbol": sym,
+        "period": period,
+        "asset_class": "forex",
+        "available": any_available,
+        "position_book": book,
+        "positioning": summary,
+        "disclaimer": FLOW_DISCLAIMER,
+        "cost_usd": 0.0,
+    }
+    if not any_available:
+        result["message"] = (
+            "Retail position-book data is unavailable for this instrument "
+            f"({book.get('note') or 'no data'}). A book-scoped Oanda token enables it."
+        )
+        result["narrative"] = None
+        return result
+
+    if narrative:
+        router = router or AIRouter()
+        prompt = (
+            f"Asset: {sym} ({period}) — SPOT FOREX. Retail position-book read:\n\n"
+            f"{json.dumps({'position_book': book, 'positioning': summary}, indent=2)}\n\n"
+            "This is spot FX (no perp funding/OI). Focus on retail crowd positioning and "
+            "trapped-trader risk. Write the desk's positioning read per your rules. JSON only."
+        )
+        raw = router.complete(TaskClass.SIGNAL_SUMMARY, prompt,
+                              system=FLOW_SYSTEM_PROMPT, max_tokens=600)
+        try:
+            result["narrative"] = json.loads(_strip_fences(raw))
+        except json.JSONDecodeError:
+            result["narrative"] = {
+                "headline": (summary["signals"][0] if summary["signals"]
+                             else "Retail positioning is not at an extreme."),
+                "key_points": summary["signals"],
+                "squeeze_watch": summary.get("squeeze_risk") or "no clear squeeze setup",
+                "generated": "rule-based-fallback",
+            }
+        result["cost_usd"] = round(router.cost_log.total_usd, 5)
+    else:
+        result["narrative"] = None
+    return result
+
+
 def institutional_flow(symbol: str = "BTCUSDT", period: str = "1h",
                        narrative: bool = True,
                        router: AIRouter | None = None,
                        fetchers: dict | None = None) -> dict:
     """Build the institutional-flow dashboard for a symbol.
 
-    `fetchers` lets tests inject the raw data (defaults to live Binance). Forex
-    symbols have no perp/futures data — returns available=False cleanly.
-    Returns deterministic reads + (optional) a cheap grounded LLM narrative.
+    Crypto -> perp funding / OI / long-short / taker flow (Binance).
+    Forex  -> retail positioning via the Oanda position book.
+    `fetchers` lets tests inject raw data. Degrades gracefully per venue.
     """
     sym = symbol.upper()
-    if asset_class(sym) != "crypto":
-        return {"symbol": sym, "available": False,
-                "message": "Institutional flow (perp/derivatives) is crypto-only.",
-                "disclaimer": FLOW_DISCLAIMER, "cost_usd": 0.0}
+    if asset_class(sym) == "forex":
+        return _forex_flow(sym, period, narrative, router, fetchers)
 
     f = fetchers or {
         "funding": binance.fetch_funding_history(sym, limit=30),

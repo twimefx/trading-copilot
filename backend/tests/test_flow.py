@@ -131,10 +131,15 @@ def test_all_streams_unavailable_degrades_cleanly():
     assert r.prompts == []          # no LLM call when there's nothing to narrate
 
 
-def test_forex_symbol_not_applicable():
-    out = institutional_flow("EUR_USD", router=_FakeRouter())
-    assert out["available"] is False
-    assert "crypto-only" in out["message"]
+def test_forex_symbol_uses_position_book_path():
+    # Forex now has a real flow path (Oanda position book), not "crypto-only".
+    book = {"available": True, "long_share": 0.68, "ratio": 2.1,
+            "long_pct": 68.0, "short_pct": 32.0,
+            "longs_underwater_pct": 35.0, "shorts_underwater_pct": 8.0}
+    out = institutional_flow("EUR_USD", fetchers={"book": book}, router=_FakeRouter())
+    assert out["available"] is True
+    assert out["asset_class"] == "forex"
+    assert out["position_book"]["regime"] == "retail_heavily_long"
 
 
 # --- endpoint ----------------------------------------------------------------
