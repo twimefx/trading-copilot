@@ -109,6 +109,7 @@ export function useApi() {
           `/journal${status ? `?status=${encodeURIComponent(status)}` : ""}`,
         ).then((r) => r.entries ?? []),
       journalStats: () => request("/journal/stats"),
+      journalCoaching: () => request("/journal/coaching"),
       journalSave: (payload: Record<string, any>) =>
         request("/journal", { method: "POST", body: JSON.stringify(payload) }),
       journalUpdate: (id: string, fields: Record<string, any>) =>

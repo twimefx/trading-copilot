@@ -9,6 +9,7 @@ Endpoints:
     POST /billing/portal   -> Stripe billing-portal URL to manage/cancel (auth)
     POST /billing/webhook  -> Stripe subscription events (signature-verified, no auth)
     /journal*              -> Trade Journal CRUD, scoped to the authenticated user
+    GET  /journal/coaching -> AI behavioral coaching over own closed trades (auth, Pro)
 
 Identity: a Clerk session JWT (Authorization: Bearer ***) is verified and its
 `sub` becomes the owner/user id everything is scoped by. In dev/tests, when
@@ -27,13 +28,14 @@ from pydantic import BaseModel
 from backend.api import auth as auth_mod
 from backend.api.auth import current_user_id
 from backend.api.guards import (
+    TTLCache,
     client_key,
     copilot_cache,
     copilot_limiter,
     scan_cache,
     spend_guard,
 )
-from backend.billing import PRO, PREMIUM, get_tier as tier_config
+from backend.billing import PRO, PREMIUM, F_JOURNAL, get_tier as tier_config
 from backend.billing import users as user_store
 from backend.journal import store as journal_store
 
@@ -285,6 +287,71 @@ def journal_list(status: str | None = None, user_id: str = Depends(current_user_
 @app.get("/journal/stats")
 def journal_stats(user_id: str = Depends(current_user_id)):
     return journal_store.stats(user_id)
+
+
+# Behavioral coaching runs an LLM call, so cache per-user to avoid re-billing on
+# repeat views of the same (slow-changing) closed-trade set. Short TTL keeps it
+# fresh after a user closes new trades.
+_COACHING_CACHE_TTL = int(os.environ.get("COACHING_CACHE_TTL", "600"))  # 10 min
+coaching_cache = TTLCache(_COACHING_CACHE_TTL)
+
+
+@app.get("/journal/coaching")
+def journal_coaching(request: Request, user_id: str = Depends(current_user_id)):
+    """AI behavioral coaching over the user's own closed-trade history.
+
+    Journal + coaching is a paid perk (F_JOURNAL). Guarded like the copilot:
+    per-user cache -> per-IP rate limit -> global daily spend cap. Returns
+    honest 'not enough data' (no LLM call) below the trade threshold.
+    """
+    tier = tier_config(user_store.get_tier(user_id))
+    if auth_mod.AUTH_ENABLED and F_JOURNAL not in tier.features:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "detail": "AI trade-journal coaching is a Pro feature. Upgrade to unlock it.",
+                "tier": tier.name,
+                "upgrade": True,
+            },
+        )
+
+    closed = journal_store.list_entries(user_id, status="closed")
+
+    cache_key = f"coach:{user_id}:{len(closed)}"
+    cached = coaching_cache.get(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
+    from backend.journal.coaching import coach, MIN_TRADES_FOR_COACHING
+
+    # Cheap pre-check: only enforce rate/spend guards when we'll actually call the LLM.
+    decided = sum(1 for e in closed if e.get("outcome") in ("win", "loss"))
+    if decided >= MIN_TRADES_FOR_COACHING:
+        allowed, retry = copilot_limiter.allow(client_key(request))
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": str(retry)},
+                content={"detail": f"Rate limit reached. Try again in ~{retry // 60 + 1} min."},
+            )
+        if not spend_guard.check():
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Daily analysis budget reached. Resets at 00:00 UTC."},
+            )
+
+    try:
+        result = coach(closed)
+    except RuntimeError as e:
+        logger.exception("coaching config error")
+        raise HTTPException(status_code=503, detail=f"Coaching unavailable: {e}") from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("coaching failed")
+        raise HTTPException(status_code=500, detail=f"Coaching error: {type(e).__name__}: {e}") from e
+
+    spend_guard.add(float(result.get("cost_usd") or 0.0))
+    coaching_cache.set(cache_key, result)
+    return {**result, "cached": False}
 
 
 @app.get("/journal/{entry_id}")

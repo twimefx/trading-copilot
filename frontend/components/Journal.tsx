@@ -91,6 +91,9 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
         </div>
       )}
 
+      {/* AI behavioral coach */}
+      <CoachPanel api={api} refreshKey={refreshKey} />
+
       {/* Status filter */}
       <div className="flex gap-2 mb-4">
         {STATUS_TABS.map((s) => (
@@ -149,6 +152,127 @@ function Stat({ label, value, hint, valueClass }: { label: string; value: string
     </div>
   );
 }
+
+type CoachFocus = { pattern: string; insight: string; action?: string };
+type CoachResult = {
+  enough_data: boolean;
+  message?: string;
+  min_trades?: number;
+  stats?: { decided_trades?: number };
+  patterns?: { pattern: string; detail: string }[];
+  coaching?: { headline?: string; focus_areas?: CoachFocus[]; encouragement?: string } | null;
+  disclaimer?: string;
+  cached?: boolean;
+};
+
+// On-demand AI behavioral coaching over the user's closed trades. We do NOT
+// auto-fetch on mount (it can cost an LLM call) — the user clicks to run it.
+function CoachPanel({ api, refreshKey }: { api: Api; refreshKey?: number }) {
+  const [data, setData] = useState<CoachResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [upgrade, setUpgrade] = useState(false);
+
+  // Clear stale coaching when the journal changes underneath us.
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    setUpgrade(false);
+  }, [refreshKey]);
+
+  async function run() {
+    setLoading(true);
+    setError(null);
+    setUpgrade(false);
+    try {
+      const res = (await api.journalCoaching()) as CoachResult;
+      setData(res);
+    } catch (e: any) {
+      if (e?.status === 402) {
+        setUpgrade(true);
+      } else {
+        setError(e?.message || "Coaching failed");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const c = data?.coaching;
+
+  return (
+    <div className="bg-panel rounded-xl border border-white/5 p-4 mb-6">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold flex items-center gap-2">
+            <span>🧠 AI Trade Coach</span>
+            {data?.cached && <span className="text-[10px] text-neutral/50 font-normal">cached</span>}
+          </div>
+          <p className="text-neutral/60 text-xs mt-0.5">
+            Honest behavioral read of your own closed trades — patterns, not predictions.
+          </p>
+        </div>
+        <button
+          onClick={run}
+          disabled={loading}
+          className="shrink-0 bg-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
+        >
+          {loading ? "Analyzing…" : data ? "Re-run" : "Analyze my trading"}
+        </button>
+      </div>
+
+      {upgrade && (
+        <div className="mt-3 bg-accent/10 border border-accent/30 rounded-lg p-3 text-sm">
+          AI trade-journal coaching is a <span className="font-semibold">Pro</span> feature. Upgrade to unlock it.
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-3 bg-bear/15 border border-bear/40 rounded-lg p-3 text-bear text-sm">{error}</div>
+      )}
+
+      {data && !data.enough_data && (
+        <div className="mt-3 text-neutral text-sm">
+          {data.message ||
+            `Log at least ${data.min_trades ?? 5} decided (win/loss) trades to unlock coaching.`}
+        </div>
+      )}
+
+      {data && data.enough_data && c && (
+        <div className="mt-4 space-y-3">
+          {c.headline && <p className="text-sm font-medium text-gray-100">{c.headline}</p>}
+          {c.focus_areas && c.focus_areas.length > 0 && (
+            <div className="space-y-2">
+              {c.focus_areas.map((f, i) => (
+                <div key={i} className="bg-panelhi rounded-lg p-3">
+                  <div className="text-xs font-semibold text-accent uppercase tracking-wide">
+                    {f.pattern.replace(/_/g, " ")}
+                  </div>
+                  {f.insight && <p className="text-sm text-gray-300 mt-1">{f.insight}</p>}
+                  {f.action && (
+                    <p className="text-sm text-bull mt-1.5">
+                      <span className="text-neutral/60">Fix: </span>
+                      {f.action}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {c.encouragement && (
+            <p className="text-sm text-gray-400 italic border-l-2 border-white/10 pl-3">
+              {c.encouragement}
+            </p>
+          )}
+          {data.disclaimer && (
+            <p className="text-[10px] text-neutral/40 mt-2">{data.disclaimer}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function EntryCard({
   entry,
