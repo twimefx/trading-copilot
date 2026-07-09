@@ -169,12 +169,30 @@ class AIRouter:
         out_tok = getattr(usage, "completion_tokens", 0) if usage else 0
         return text, in_tok, out_tok
 
+    def _dispatch(self, choice: ModelChoice, model: str, prompt: str,
+                  max_tokens: int, system: str | None) -> tuple[str, int, int]:
+        """Call the provider for `choice`. Raises on provider/network error."""
+        if choice.provider == "anthropic":
+            return self._complete_anthropic(choice, model, prompt, max_tokens, system)
+        elif choice.provider == "openai":
+            return self._complete_openai_compatible(
+                self._openai_client(), model, prompt, max_tokens, system)
+        elif choice.provider == "deepseek":
+            return self._complete_openai_compatible(
+                self._deepseek_client(), model, prompt, max_tokens, system)
+        raise NotImplementedError(f"Provider '{choice.provider}' not supported")
+
     def complete(self, task: TaskClass, prompt: str, *, max_tokens: int = 1024,
                  system: str | None = None) -> str:
         """Route `prompt` to the right model for `task`, log cost, return text.
 
-        If the routed provider has no API key configured, transparently fall back
-        to the always-on Anthropic provider so the feature keeps working.
+        Resilience: if the routed provider has no API key configured, OR its call
+        fails at runtime (quota exhausted, rate limit, transient network error),
+        we transparently fall back to the always-on Anthropic provider so the
+        feature keeps working. Both fallback paths are logged so cost/health drift
+        is visible. This matters in practice — e.g. a valid OpenAI key with no
+        billing credits returns HTTP 429 insufficient_quota, which must NOT take
+        the feature down.
         """
         choice = ROUTING.get(task, ROUTING[TaskClass.DEFAULT])
 
@@ -189,17 +207,22 @@ class AIRouter:
 
         model = _resolve_model(task, choice)
 
-        if choice.provider == "anthropic":
-            text, in_tok, out_tok = self._complete_anthropic(
-                choice, model, prompt, max_tokens, system)
-        elif choice.provider == "openai":
-            text, in_tok, out_tok = self._complete_openai_compatible(
-                self._openai_client(), model, prompt, max_tokens, system)
-        elif choice.provider == "deepseek":
-            text, in_tok, out_tok = self._complete_openai_compatible(
-                self._deepseek_client(), model, prompt, max_tokens, system)
-        else:
-            raise NotImplementedError(f"Provider '{choice.provider}' not supported")
+        try:
+            text, in_tok, out_tok = self._dispatch(choice, model, prompt, max_tokens, system)
+        except Exception as e:  # noqa: BLE001 — any provider failure => try the fallback
+            # Don't loop if we already ARE the fallback provider (e.g. Anthropic down).
+            if choice.provider == _FALLBACK.provider and model == _FALLBACK.model:
+                logger.error("fallback provider %s/%s also failed for task=%s: %s",
+                             choice.provider, model, task.value, e)
+                raise
+            logger.warning(
+                "provider '%s' failed for task=%s (%s: %s) -> falling back to %s/%s",
+                choice.provider, task.value, type(e).__name__, str(e)[:120],
+                _FALLBACK.provider, _FALLBACK.model,
+            )
+            choice = _FALLBACK
+            model = _resolve_model(task, choice)
+            text, in_tok, out_tok = self._dispatch(choice, model, prompt, max_tokens, system)
 
         # Cost log reflects the model actually used (fallback price if we fell back).
         self.cost_log.record(task, ModelChoice(choice.provider, model,

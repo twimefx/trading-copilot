@@ -153,3 +153,34 @@ def test_cost_accumulates_across_calls(monkeypatch):
     r.complete(TaskClass.MARKET_SCAN, "b")
     assert len(r.cost_log.calls) == 2
     assert r.cost_log.total_usd > 0
+
+
+def test_runtime_provider_error_falls_back_to_anthropic(monkeypatch):
+    """A configured provider that ERRORS at call time (e.g. OpenAI 429 no-quota)
+    must fall back to Anthropic, not fail the request."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-oa-nocredits")
+    r, fa, fo, fd = _router_with_fakes(monkeypatch)
+
+    # OpenAI client raises like an insufficient_quota 429.
+    def _boom(**kwargs):
+        raise RuntimeError("Error code: 429 - insufficient_quota")
+    fo.chat.completions.create = _boom  # type: ignore[attr-defined]
+
+    out = r.complete(TaskClass.SIGNAL_SUMMARY, "summarize")   # routes to openai
+    assert out == "ANTHROPIC_OK"                              # served by fallback
+    assert len(fa.calls) == 1
+    assert r.cost_log.calls[0]["provider"] == "anthropic"
+
+
+def test_fallback_provider_error_propagates(monkeypatch):
+    """If the fallback (Anthropic) itself fails, the error surfaces — no infinite loop."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+    r, fa, fo, fd = _router_with_fakes(monkeypatch)
+
+    def _boom(**kwargs):
+        raise RuntimeError("anthropic down")
+    fa.messages.create = _boom  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError):
+        r.complete(TaskClass.MARKET_COPILOT, "x")   # routes to anthropic == fallback
