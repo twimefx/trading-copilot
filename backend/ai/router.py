@@ -4,11 +4,18 @@ Routes each task class to the cheapest model that meets quality needs, logs toke
 cost per call, and stays swappable so we never get locked into one vendor.
 
 Heavy reasoning  -> Claude Opus/Sonnet  (best quality)
-Mid structured   -> GPT-class / Hermes  (fast, cheap-ish)
-Bulk scans       -> DeepSeek            (cheapest at scale)
+Mid structured   -> GPT-class            (fast, cheap-ish)
+Bulk scans       -> DeepSeek             (cheapest at scale)
 
-Phase 0: Anthropic provider only (verifies the architecture). OpenAI/DeepSeek
-providers slot in behind the same `complete()` interface in Phase 1+.
+Phase 1: three providers wired behind one `complete()` interface —
+  * anthropic  (native SDK)
+  * openai     (native SDK)
+  * deepseek   (OpenAI-compatible SDK, base_url override)
+
+Each provider activates only when its API key env var is set. If a route points
+at a provider whose key is missing, we FALL BACK to Anthropic (the always-on
+premium provider) rather than erroring — so the product never goes dark just
+because DeepSeek isn't configured yet. The fallback is logged so cost drift is visible.
 """
 from __future__ import annotations
 
@@ -18,6 +25,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 logger = logging.getLogger("ai.router")
+
+# DeepSeek speaks the OpenAI wire protocol; only the base URL differs.
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 
 class TaskClass(str, Enum):
@@ -42,16 +52,39 @@ class ModelChoice:
 
 # --- Routing table -----------------------------------------------------------
 # Premium reasoning -> Claude. Cheap bulk -> DeepSeek. Mid -> GPT-class.
+# Model ids are env-overridable (MODEL_<TASK>) so we can retune in prod without a
+# redeploy when a provider ships a newer/cheaper model or deprecates an id.
 ROUTING: dict[TaskClass, ModelChoice] = {
     TaskClass.MARKET_COPILOT:    ModelChoice("anthropic", "claude-opus-4-8", 15.0, 75.0),
     TaskClass.TRADE_EXPLANATION: ModelChoice("anthropic", "claude-opus-4-8", 15.0, 75.0),
     TaskClass.STRATEGY_BUILDER:  ModelChoice("anthropic", "claude-opus-4-8", 15.0, 75.0),
     TaskClass.AGENT_CONSENSUS:   ModelChoice("anthropic", "claude-opus-4-8", 15.0, 75.0),
-    TaskClass.SIGNAL_SUMMARY:    ModelChoice("anthropic", "claude-sonnet-4-6", 3.0, 15.0),
+    TaskClass.SIGNAL_SUMMARY:    ModelChoice("openai", "gpt-4o-mini", 0.15, 0.60),
     TaskClass.MARKET_SCAN:       ModelChoice("deepseek", "deepseek-chat", 0.27, 1.10),
-    # Cheap default until DeepSeek is wired (Phase 1): Haiku.
+    # Cheap default: DeepSeek when configured, else falls back to Anthropic Haiku.
     TaskClass.DEFAULT:           ModelChoice("anthropic", "claude-haiku-4-5-20251001", 1.0, 5.0),
 }
+
+# Env var that carries each provider's credential. Missing key => provider disabled.
+_PROVIDER_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+}
+
+# Fallback when a routed provider is unconfigured. Anthropic is the always-on
+# premium provider (its key is required for the product to function at all).
+_FALLBACK = ModelChoice("anthropic", "claude-haiku-4-5-20251001", 1.0, 5.0)
+
+
+def _provider_configured(provider: str) -> bool:
+    env = _PROVIDER_KEY_ENV.get(provider)
+    return bool(env and os.environ.get(env, "").strip())
+
+
+def _resolve_model(task: TaskClass, choice: ModelChoice) -> str:
+    """Allow a MODEL_<TASK> env override of the model id (prod retuning w/o deploy)."""
+    return os.environ.get(f"MODEL_{task.name}", "").strip() or choice.model
 
 
 @dataclass
@@ -77,7 +110,10 @@ class AIRouter:
     def __init__(self, cost_log: CostLog | None = None):
         self.cost_log = cost_log or CostLog()
         self._anthropic = None
+        self._openai = None
+        self._deepseek = None
 
+    # --- lazy provider clients (import + construct on first use) --------------
     def _anthropic_client(self):
         if self._anthropic is None:
             import anthropic
@@ -87,24 +123,89 @@ class AIRouter:
             self._anthropic = anthropic.Anthropic(api_key=key)
         return self._anthropic
 
+    def _openai_client(self):
+        if self._openai is None:
+            from openai import OpenAI
+            key = os.environ.get("OPENAI_API_KEY")
+            if not key:
+                raise RuntimeError("OPENAI_API_KEY not set")
+            self._openai = OpenAI(api_key=key)
+        return self._openai
+
+    def _deepseek_client(self):
+        if self._deepseek is None:
+            from openai import OpenAI  # DeepSeek is OpenAI-wire-compatible
+            key = os.environ.get("DEEPSEEK_API_KEY")
+            if not key:
+                raise RuntimeError("DEEPSEEK_API_KEY not set")
+            base = os.environ.get("DEEPSEEK_BASE_URL", DEEPSEEK_BASE_URL)
+            self._deepseek = OpenAI(api_key=key, base_url=base)
+        return self._deepseek
+
+    # --- per-provider completion (uniform text-in/text-out) ------------------
+    def _complete_anthropic(self, choice: ModelChoice, model: str, prompt: str,
+                            max_tokens: int, system: str | None) -> tuple[str, int, int]:
+        client = self._anthropic_client()
+        kwargs = {"model": model, "max_tokens": max_tokens,
+                  "messages": [{"role": "user", "content": prompt}]}
+        if system:
+            kwargs["system"] = system
+        msg = client.messages.create(**kwargs)
+        return msg.content[0].text, msg.usage.input_tokens, msg.usage.output_tokens
+
+    def _complete_openai_compatible(self, client, model: str, prompt: str,
+                                    max_tokens: int, system: str | None) -> tuple[str, int, int]:
+        """Shared path for OpenAI and DeepSeek (identical chat.completions API)."""
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        resp = client.chat.completions.create(
+            model=model, max_tokens=max_tokens, messages=messages,
+        )
+        text = resp.choices[0].message.content or ""
+        usage = resp.usage
+        in_tok = getattr(usage, "prompt_tokens", 0) if usage else 0
+        out_tok = getattr(usage, "completion_tokens", 0) if usage else 0
+        return text, in_tok, out_tok
+
     def complete(self, task: TaskClass, prompt: str, *, max_tokens: int = 1024,
                  system: str | None = None) -> str:
-        """Route `prompt` to the right model for `task`, log cost, return text."""
+        """Route `prompt` to the right model for `task`, log cost, return text.
+
+        If the routed provider has no API key configured, transparently fall back
+        to the always-on Anthropic provider so the feature keeps working.
+        """
         choice = ROUTING.get(task, ROUTING[TaskClass.DEFAULT])
 
-        if choice.provider == "anthropic":
-            client = self._anthropic_client()
-            kwargs = {"model": choice.model, "max_tokens": max_tokens,
-                      "messages": [{"role": "user", "content": prompt}]}
-            if system:
-                kwargs["system"] = system
-            msg = client.messages.create(**kwargs)
-            text = msg.content[0].text
-            self.cost_log.record(task, choice, msg.usage.input_tokens, msg.usage.output_tokens)
-            return text
+        if not _provider_configured(choice.provider):
+            logger.warning(
+                "provider '%s' for task=%s unconfigured (%s missing) -> falling back to %s/%s",
+                choice.provider, task.value,
+                _PROVIDER_KEY_ENV.get(choice.provider, "?"),
+                _FALLBACK.provider, _FALLBACK.model,
+            )
+            choice = _FALLBACK
 
-        # Phase 1+: openai / deepseek providers behind the same interface.
-        raise NotImplementedError(f"Provider '{choice.provider}' not wired yet (Phase 1+)")
+        model = _resolve_model(task, choice)
+
+        if choice.provider == "anthropic":
+            text, in_tok, out_tok = self._complete_anthropic(
+                choice, model, prompt, max_tokens, system)
+        elif choice.provider == "openai":
+            text, in_tok, out_tok = self._complete_openai_compatible(
+                self._openai_client(), model, prompt, max_tokens, system)
+        elif choice.provider == "deepseek":
+            text, in_tok, out_tok = self._complete_openai_compatible(
+                self._deepseek_client(), model, prompt, max_tokens, system)
+        else:
+            raise NotImplementedError(f"Provider '{choice.provider}' not supported")
+
+        # Cost log reflects the model actually used (fallback price if we fell back).
+        self.cost_log.record(task, ModelChoice(choice.provider, model,
+                                                choice.in_price, choice.out_price),
+                             in_tok, out_tok)
+        return text
 
 
 if __name__ == "__main__":

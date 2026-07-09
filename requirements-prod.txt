@@ -17,3 +17,7 @@ psycopg[binary]~=3.2.0
 pyjwt[crypto]~=2.10.0
 # Billing: Stripe Checkout + webhook signature verification.
 stripe~=11.4.0
+# Multi-provider LLM routing (Phase 1). The OpenAI SDK also drives DeepSeek via
+# its OpenAI-compatible endpoint (base_url override) — one dep covers both the
+# mid-tier (GPT) and cheap-bulk (DeepSeek) routing tiers.
+openai~=1.60.0
