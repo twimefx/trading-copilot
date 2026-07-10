@@ -46,3 +46,7 @@ vendor/Kronos/
 .venv-prod/
 .vercel
 .vercel_token
+
+dogfood-output/
+
+.cksk

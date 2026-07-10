@@ -21,6 +21,8 @@ import urllib.request
 
 import pandas as pd
 
+from backend.data.errors import UnknownSymbolError
+
 _PRACTICE = "https://api-fxpractice.oanda.com"
 _LIVE = "https://api-fxtrade.oanda.com"
 
@@ -54,8 +56,14 @@ def fetch_klines(symbol: str = "EUR_USD", interval: str = "1h", limit: int = 400
     url = (f"{_base_url()}/v3/instruments/{instrument}/candles"
            f"?count={min(limit, 5000)}&granularity={gran}&price=M")
     req = urllib.request.Request(url, headers=_headers())
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        # Oanda returns 400/404 for an unknown instrument — surface a clean error.
+        if e.code in (400, 404):
+            raise UnknownSymbolError(symbol, "Oanda") from e
+        raise
 
     rows = []
     for c in data.get("candles", []):

@@ -172,8 +172,11 @@ def copilot(req: CopilotRequest, request: Request,
         )
 
     from backend.signals.copilot import analyze_symbol
+    from backend.data.errors import UnknownSymbolError
     try:
         result = analyze_symbol(sym, req.interval, include_kronos=req.include_kronos)
+    except UnknownSymbolError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except RuntimeError as e:
         logger.exception("copilot config error")
         raise HTTPException(status_code=503, detail=f"Copilot unavailable: {e}") from e
@@ -482,8 +485,11 @@ def debate(req: DebateRequest, request: Request,
         )
 
     from backend.signals.debate import debate as run_debate
+    from backend.data.errors import UnknownSymbolError
     try:
         result = run_debate(sym, req.interval, include_kronos=req.include_kronos)
+    except UnknownSymbolError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except RuntimeError as e:
         logger.exception("debate config error")
         raise HTTPException(status_code=503, detail=f"Debate unavailable: {e}") from e
@@ -594,8 +600,11 @@ def strategy(req: StrategyRequest, request: Request,
         )
 
     from backend.signals.strategy import build_strategy, SpecError
+    from backend.data.errors import UnknownSymbolError
     try:
         result = build_strategy(prompt, sym, req.interval)
+    except UnknownSymbolError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except SpecError as e:
         # The model produced an invalid/unsupported spec — user-facing, not a 500.
         raise HTTPException(
