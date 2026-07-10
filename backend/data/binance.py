@@ -85,25 +85,31 @@ def _get_json(url: str):
         return json.loads(resp.read().decode())
 
 
-# Bybit fallback for the futures/positioning data: Binance's fapi host 451s on
-# many cloud IPs (Railway), so when a Binance futures call comes back unavailable
-# we retry the same signal via Bybit v5 (same return shape). Toggle off with
-# FUTURES_FALLBACK=0. Import is lazy to avoid a hard cycle and to keep import cost
-# off the hot spot-klines path.
+# Fallback chain for futures/positioning data: Binance's fapi 451s on many cloud
+# IPs (Railway), and Bybit 403s on the same IPs, so we chain sources:
+#   Binance (primary) -> Bybit (exchange) -> CoinGecko (cloud-friendly snapshot).
+# CoinGecko is a point-in-time snapshot (no trend/history) but is reachable from
+# blocked datacenter IPs, so it keeps the funding regime + current OI alive.
+# Toggle off with FUTURES_FALLBACK=0.
 _FUTURES_FALLBACK = os.environ.get("FUTURES_FALLBACK", "1") != "0"
 
 
-def _with_bybit_fallback(binance_result: dict, bybit_fn, *args, **kwargs) -> dict:
-    """Return the Binance result if available, else try Bybit, else the original."""
+def _with_futures_fallback(binance_result: dict, bybit_fn, coingecko_fn=None,
+                           *args, **kwargs) -> dict:
+    """Return Binance result if available; else try Bybit; else CoinGecko; else original."""
     if binance_result.get("available") or not _FUTURES_FALLBACK:
         return binance_result
-    try:
-        from backend.data import bybit
-        fb = bybit_fn(bybit, *args, **kwargs)
-        if fb.get("available"):
-            return fb
-    except Exception:  # noqa: BLE001 — fallback must never raise
-        pass
+    for mod_name, fn in (("bybit", bybit_fn), ("coingecko", coingecko_fn)):
+        if fn is None:
+            continue
+        try:
+            from backend.data import bybit, coingecko  # noqa: F401
+            mod = {"bybit": bybit, "coingecko": coingecko}[mod_name]
+            fb = fn(mod, *args, **kwargs)
+            if fb.get("available"):
+                return fb
+        except Exception:  # noqa: BLE001 — fallback must never raise
+            continue
     return binance_result
 
 
@@ -122,7 +128,8 @@ def fetch_funding_rate(symbol: str = "BTCUSDT") -> dict:
             }
         except Exception as e:  # noqa: BLE001
             return {"funding_rate": None, "available": False, "error": str(e)[:120]}
-    return _with_bybit_fallback(_binance(), lambda b: b.fetch_funding_rate(symbol))
+    return _with_futures_fallback(_binance(), lambda b: b.fetch_funding_rate(symbol),
+                                  lambda c: c.fetch_funding_rate(symbol))
 
 
 def fetch_open_interest(symbol: str = "BTCUSDT") -> dict:
@@ -133,7 +140,8 @@ def fetch_open_interest(symbol: str = "BTCUSDT") -> dict:
             return {"open_interest": float(data["openInterest"]), "available": True}
         except Exception as e:  # noqa: BLE001
             return {"open_interest": None, "available": False, "error": str(e)[:120]}
-    return _with_bybit_fallback(_binance(), lambda b: b.fetch_open_interest(symbol))
+    return _with_futures_fallback(_binance(), lambda b: b.fetch_open_interest(symbol),
+                                  lambda c: c.fetch_open_interest(symbol))
 
 
 def fetch_funding_history(symbol: str = "BTCUSDT", limit: int = 30) -> dict:
@@ -148,8 +156,9 @@ def fetch_funding_history(symbol: str = "BTCUSDT", limit: int = 30) -> dict:
             return {"series": series, "available": True}
         except Exception as e:  # noqa: BLE001
             return {"series": [], "available": False, "error": str(e)[:120]}
-    return _with_bybit_fallback(_binance(),
-                                lambda b: b.fetch_funding_history(symbol, limit))
+    return _with_futures_fallback(_binance(),
+                                  lambda b: b.fetch_funding_history(symbol, limit),
+                                  lambda c: c.fetch_funding_history(symbol, limit))
 
 
 def fetch_oi_history(symbol: str = "BTCUSDT", period: str = "1h", limit: int = 30) -> dict:
@@ -168,8 +177,9 @@ def fetch_oi_history(symbol: str = "BTCUSDT", period: str = "1h", limit: int = 3
             return {"series": series, "available": True}
         except Exception as e:  # noqa: BLE001
             return {"series": [], "available": False, "error": str(e)[:120]}
-    return _with_bybit_fallback(_binance(),
-                                lambda b: b.fetch_oi_history(symbol, period, limit))
+    return _with_futures_fallback(_binance(),
+                                  lambda b: b.fetch_oi_history(symbol, period, limit),
+                                  lambda c: c.fetch_oi_history(symbol, period, limit))
 
 
 def fetch_long_short_ratio(symbol: str = "BTCUSDT", period: str = "1h", limit: int = 30) -> dict:
@@ -187,8 +197,8 @@ def fetch_long_short_ratio(symbol: str = "BTCUSDT", period: str = "1h", limit: i
             return {"series": series, "available": True}
         except Exception as e:  # noqa: BLE001
             return {"series": [], "available": False, "error": str(e)[:120]}
-    return _with_bybit_fallback(_binance(),
-                                lambda b: b.fetch_long_short_ratio(symbol, period, limit))
+    return _with_futures_fallback(_binance(),
+                                  lambda b: b.fetch_long_short_ratio(symbol, period, limit))
 
 
 def fetch_taker_ratio(symbol: str = "BTCUSDT", period: str = "1h", limit: int = 30) -> dict:

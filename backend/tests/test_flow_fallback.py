@@ -118,6 +118,47 @@ def test_fallback_disabled_by_env(monkeypatch):
     assert spy["called"] is False
 
 
+def test_coingecko_second_tier_when_bybit_also_blocked(monkeypatch):
+    # Binance blocked AND Bybit blocked -> CoinGecko snapshot keeps funding alive.
+    from backend.data import coingecko
+    _binance_futures_dead(monkeypatch)
+    monkeypatch.setattr(bybit, "fetch_funding_history",
+                        lambda s, l=30: {"series": [], "available": False, "error": "403"})
+    monkeypatch.setattr(coingecko, "fetch_funding_history",
+                        lambda s, l=30: {"series": [{"time": 0, "rate": 0.0001}],
+                                         "available": True, "source": "coingecko",
+                                         "snapshot_only": True})
+    out = binance.fetch_funding_history("BTCUSDT", 5)
+    assert out["available"] is True
+    assert out["source"] == "coingecko"
+
+
+def test_oi_coingecko_second_tier(monkeypatch):
+    from backend.data import coingecko
+    _binance_futures_dead(monkeypatch)
+    monkeypatch.setattr(bybit, "fetch_oi_history",
+                        lambda s, p="1h", l=30: {"series": [], "available": False})
+    monkeypatch.setattr(coingecko, "fetch_oi_history",
+                        lambda s, p="1h", l=30: {"series": [{"time": 0, "oi": 5e9, "oi_value": 5e9}],
+                                                 "available": True, "source": "coingecko"})
+    out = binance.fetch_oi_history("BTCUSDT", "1h", 5)
+    assert out["available"] is True and out["source"] == "coingecko"
+
+
+def test_long_short_has_no_coingecko_tier(monkeypatch):
+    # L/S ratio has no CoinGecko equivalent -> stays unavailable when both exchanges fail.
+    from backend.data import coingecko
+    _binance_futures_dead(monkeypatch)
+    monkeypatch.setattr(bybit, "fetch_long_short_ratio",
+                        lambda s, p="1h", l=30: {"series": [], "available": False})
+    called = {"cg": False}
+    monkeypatch.setattr(coingecko, "fetch_funding_history",
+                        lambda *a, **k: called.__setitem__("cg", True) or {"available": True})
+    out = binance.fetch_long_short_ratio("BTCUSDT", "1h", 5)
+    assert out["available"] is False
+    assert called["cg"] is False    # CoinGecko never consulted for L/S
+
+
 def test_bybit_parses_real_shapes():
     # Guard the Bybit response parsing against shape drift (unit test, no network).
     # funding history newest-first -> oldest-first
