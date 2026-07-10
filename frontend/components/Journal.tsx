@@ -30,10 +30,12 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [upgrade, setUpgrade] = useState(false);
 
   async function load() {
     setLoading(true);
     setError(null);
+    setUpgrade(false);
     try {
       const [es, st] = await Promise.all([
         api.journalList(filter === "all" ? undefined : filter),
@@ -42,7 +44,11 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
       setEntries(es as JournalEntry[]);
       setStats(st);
     } catch (e: any) {
-      setError(e.message || "Failed to load journal");
+      if (e?.status === 402) {
+        setUpgrade(true);
+      } else {
+        setError(e.message || "Failed to load journal");
+      }
     } finally {
       setLoading(false);
     }
@@ -73,8 +79,14 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
 
   return (
     <div>
+      {upgrade && (
+        <div className="bg-accent/10 border border-accent/30 rounded-xl p-4 text-sm mb-4">
+          The trade journal is a <span className="font-semibold">Pro</span> feature. Upgrade to log trades, track performance, and unlock AI coaching.
+        </div>
+      )}
+
       {/* Performance summary */}
-      {stats && (
+      {!upgrade && stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <Stat label="Closed trades" value={String(stats.closed_trades)} />
           <Stat
@@ -92,9 +104,10 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
       )}
 
       {/* AI behavioral coach */}
-      <CoachPanel api={api} refreshKey={refreshKey} />
+      {!upgrade && <CoachPanel api={api} refreshKey={refreshKey} />}
 
       {/* Status filter */}
+      {!upgrade && (
       <div className="flex gap-2 mb-4">
         {STATUS_TABS.map((s) => (
           <button
@@ -108,6 +121,7 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
           </button>
         ))}
       </div>
+      )}
 
       {error && (
         <div className="bg-bear/15 border border-bear/40 rounded-xl p-3 text-bear text-sm mb-4">
@@ -115,7 +129,7 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
         </div>
       )}
 
-      {loading && (
+      {!upgrade && loading && (
         <div className="space-y-3 animate-pulse">
           {[0, 1, 2].map((i) => (
             <div key={i} className="rounded-xl border border-white/5 bg-panel h-24" />
@@ -123,7 +137,7 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
         </div>
       )}
 
-      {!loading && entries.length === 0 && (
+      {!upgrade && !loading && entries.length === 0 && (
         <div className="rounded-2xl border border-dashed border-white/10 p-10 text-center">
           <p className="text-neutral text-sm">No journal entries yet.</p>
           <p className="text-neutral/60 text-xs mt-1">
@@ -132,7 +146,7 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
         </div>
       )}
 
-      {!loading && entries.length > 0 && (
+      {!upgrade && !loading && entries.length > 0 && (
         <div className="space-y-3">
           {entries.map((e) => (
             <EntryCard key={e.id} entry={e} onPatch={patch} onDelete={remove} />

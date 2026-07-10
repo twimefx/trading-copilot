@@ -175,6 +175,29 @@ def test_api_update_missing_returns_404(api):
     assert r.status_code == 404
 
 
+def test_journal_gated_to_pro(api, monkeypatch):
+    """Journal CRUD is a Pro feature: free -> 402, pro/premium -> allowed."""
+    import backend.api.auth as auth
+    import backend.billing.users as users
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
+    users.init_db()
+
+    # Free tier: every journal CRUD endpoint returns 402 (upgrade prompt).
+    monkeypatch.setattr(users, "get_tier", lambda uid: "free")
+    assert api.get("/journal").status_code == 402
+    assert api.post("/journal", json=SAMPLE).status_code == 402
+    assert api.get("/journal/stats").status_code == 402
+    assert api.get("/journal/anything").status_code == 402
+    assert api.patch("/journal/x", json={"notes": "n"}).status_code == 402
+    assert api.delete("/journal/x").status_code == 402
+
+    # Pro tier: journal works again.
+    monkeypatch.setattr(users, "get_tier", lambda uid: "pro")
+    r = api.post("/journal", json=SAMPLE)
+    assert r.status_code == 201
+    assert api.get("/journal").status_code == 200
+
+
 # --- Postgres backend (real server) -----------------------------------------
 # Verifies the prod code path (psycopg + JSONB + "%s" placeholders) against a
 # genuine Postgres, using the self-contained `pgserver` wheel. Skips cleanly if

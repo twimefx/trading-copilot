@@ -69,6 +69,25 @@ class CopilotRequest(BaseModel):
     include_kronos: bool = True
 
 
+def require_journal_user(user_id: str = Depends(current_user_id)) -> str:
+    """Dependency: authenticated user who has the Journal (Pro) feature.
+
+    The trade journal — including basic CRUD — is a Pro perk (F_JOURNAL), matching
+    the tier config and the /journal/coaching gate. Free users get a 402 upgrade
+    prompt instead of silent access. When auth is disabled (anon/open mode) there's
+    no tiering, so the gate is a no-op and we don't touch the users table.
+    """
+    if not auth_mod.AUTH_ENABLED:
+        return user_id
+    tier = tier_config(user_store.get_tier(user_id))
+    if F_JOURNAL not in tier.features:
+        raise HTTPException(
+            status_code=402,
+            detail="The trade journal is a Pro feature. Upgrade to unlock it.",
+        )
+    return user_id
+
+
 class ScanRequest(BaseModel):
     symbols: list[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
     interval: str = "1h"
@@ -291,7 +310,7 @@ class JournalUpdate(BaseModel):
 
 
 @app.post("/journal", status_code=201)
-def journal_create(body: JournalCreate, user_id: str = Depends(current_user_id)):
+def journal_create(body: JournalCreate, user_id: str = Depends(require_journal_user)):
     try:
         return journal_store.create_entry(user_id, body.model_dump())
     except ValueError as e:
@@ -299,12 +318,12 @@ def journal_create(body: JournalCreate, user_id: str = Depends(current_user_id))
 
 
 @app.get("/journal")
-def journal_list(status: str | None = None, user_id: str = Depends(current_user_id)):
+def journal_list(status: str | None = None, user_id: str = Depends(require_journal_user)):
     return {"entries": journal_store.list_entries(user_id, status=status)}
 
 
 @app.get("/journal/stats")
-def journal_stats(user_id: str = Depends(current_user_id)):
+def journal_stats(user_id: str = Depends(require_journal_user)):
     return journal_store.stats(user_id)
 
 
@@ -624,7 +643,7 @@ def strategy(req: StrategyRequest, request: Request,
 
 
 @app.get("/journal/{entry_id}")
-def journal_get(entry_id: str, user_id: str = Depends(current_user_id)):
+def journal_get(entry_id: str, user_id: str = Depends(require_journal_user)):
     entry = journal_store.get_entry(user_id, entry_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Entry not found.")
@@ -633,7 +652,7 @@ def journal_get(entry_id: str, user_id: str = Depends(current_user_id)):
 
 @app.patch("/journal/{entry_id}")
 def journal_update(entry_id: str, body: JournalUpdate,
-                   user_id: str = Depends(current_user_id)):
+                   user_id: str = Depends(require_journal_user)):
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     try:
         entry = journal_store.update_entry(user_id, entry_id, fields)
@@ -645,7 +664,7 @@ def journal_update(entry_id: str, body: JournalUpdate,
 
 
 @app.delete("/journal/{entry_id}", status_code=204)
-def journal_delete(entry_id: str, user_id: str = Depends(current_user_id)):
+def journal_delete(entry_id: str, user_id: str = Depends(require_journal_user)):
     if not journal_store.delete_entry(user_id, entry_id):
         raise HTTPException(status_code=404, detail="Entry not found.")
     return JSONResponse(status_code=204, content=None)
