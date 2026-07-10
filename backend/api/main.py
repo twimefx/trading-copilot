@@ -101,6 +101,28 @@ def health():
     }
 
 
+@app.get("/debug/dataprobe")
+def _debug_dataprobe():
+    """TEMP diagnostic: probe crypto data-source reachability from this host.
+
+    Confirms whether Binance/Bybit geo-block the deploy IP. Remove after QA.
+    """
+    import urllib.request as _u
+    out = {}
+    for label, url in [
+        ("binance_fapi", "https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1"),
+        ("bybit_funding", "https://api.bybit.com/v5/market/funding/history?category=linear&symbol=BTCUSDT&limit=1"),
+        ("bybit_tickers", "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT"),
+    ]:
+        try:
+            req = _u.Request(url, headers={"User-Agent": "trading-copilot/0.1"})
+            with _u.urlopen(req, timeout=15) as r:
+                out[label] = {"status": r.status}
+        except Exception as e:  # noqa: BLE001
+            out[label] = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+    return out
+
+
 @app.get("/me")
 def me(user_id: str = Depends(current_user_id)):
     """Current user's entitlement + today's usage — powers the UI's tier badge/quota."""
