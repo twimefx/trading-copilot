@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,7 +40,7 @@ from backend.api.guards import (
     scan_cache,
     spend_guard,
 )
-from backend.billing import PRO, PREMIUM, F_JOURNAL, F_DEBATE, F_FLOW, F_STRATEGY, get_tier as tier_config
+from backend.billing import PRO, PREMIUM, F_JOURNAL, F_DEBATE, F_FLOW, F_STRATEGY, F_REPLAY, get_tier as tier_config
 from backend.billing import users as user_store
 from backend.journal import store as journal_store
 from backend import alerts as alert_store
@@ -550,6 +551,106 @@ def debate(req: DebateRequest, request: Request,
     spend_guard.add(float(result.get("cost_usd") or 0.0))
     debate_cache.set(cache_key, result)
     return {**result, "cached": False}
+
+
+# --- Market Replay (Premium) ---------------------------------------------------
+# Copilot/Debate run against a context truncated at a historical `as_of` — the
+# model never sees future candles; the outcome is deterministic pandas math.
+_REPLAY_CACHE_TTL = int(os.environ.get("REPLAY_CACHE_TTL", "3600"))  # 1h — history doesn't change
+replay_cache = TTLCache(_REPLAY_CACHE_TTL)
+
+
+class ReplayRequest(BaseModel):
+    symbol: str = "BTCUSDT"
+    interval: str = "1h"
+    as_of: int                    # epoch seconds — the historical moment
+    mode: str = "copilot"         # "copilot" | "debate"
+    include_kronos: bool = True
+
+
+@app.post("/replay")
+def replay_endpoint(req: ReplayRequest, request: Request,
+                    user_id: str = Depends(current_user_id)):
+    """Market Replay — Copilot/Debate as of a past moment + honest outcome. Premium only."""
+    tier = tier_config(user_store.get_tier(user_id))
+    if auth_mod.AUTH_ENABLED and F_REPLAY not in tier.features:
+        return JSONResponse(
+            status_code=402,
+            content={
+                "detail": "Market Replay is a Premium feature. Upgrade to unlock it.",
+                "tier": tier.name,
+                "upgrade": True,
+            },
+        )
+
+    if req.mode not in ("copilot", "debate"):
+        raise HTTPException(status_code=422, detail="mode must be 'copilot' or 'debate'.")
+    now = int(time.time())
+    if req.as_of > now - 3600:
+        raise HTTPException(status_code=422, detail="as_of must be at least 1 hour in the past.")
+    if req.as_of < now - 90 * 86400:
+        raise HTTPException(status_code=422, detail="as_of is limited to the last 90 days.")
+
+    sym = req.symbol.upper()
+    cache_key = f"replay:{req.mode}:{sym}:{req.interval}:{req.as_of}:{int(req.include_kronos)}"
+    cached = replay_cache.get(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
+    allowed, retry = copilot_limiter.allow(client_key(request))
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": str(retry)},
+            content={"detail": f"Rate limit reached. Try again in ~{retry // 60 + 1} min."},
+        )
+    if not spend_guard.check():
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Daily analysis budget reached. Resets at 00:00 UTC."},
+        )
+
+    from backend.signals import replay as replay_mod
+    from backend.data.errors import UnknownSymbolError
+    try:
+        ctx = replay_mod.build_replay_context(sym, req.interval, req.as_of,
+                                              include_kronos=req.include_kronos)
+        if req.mode == "debate":
+            from backend.signals.debate import debate as run_debate
+            result = run_debate(ctx=ctx)
+            lean = result["consensus"]["lean"]
+        else:
+            from backend.signals.copilot import analyze
+            result = analyze(ctx)
+            lean = result.get("lean")
+        outcome_df = replay_mod.fetch_outcome(sym, req.interval, req.as_of)
+        entry = ctx.indicators.get("last_close")
+        outcome = replay_mod.score_outcome(entry, lean, outcome_df)
+    except UnknownSymbolError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("replay failed")
+        raise HTTPException(status_code=500, detail=f"Replay error: {type(e).__name__}: {e}") from e
+
+    spend_guard.add(float(result.get("cost_usd") or 0.0))
+    payload = {
+        "symbol": sym,
+        "interval": req.interval,
+        "mode": req.mode,
+        "as_of": req.as_of,
+        "analysis": result,
+        "outcome": outcome,
+        "replay": True,
+        "note": ("Replay answers as of the chosen moment — the model saw no future "
+                 "candles. Positioning (funding/OI) is unavailable for historical "
+                 "replays, so a replayed call relies on technicals only and may "
+                 "differ from the live call made at that time. Outcome is computed "
+                 "deterministically."),
+    }
+    replay_cache.set(cache_key, payload)
+    return {**payload, "cached": False}
 
 
 # --- Institutional Flow Dashboard (Premium) ----------------------------------

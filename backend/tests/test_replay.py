@@ -140,3 +140,87 @@ def test_replay_is_premium_only():
     assert has_feature(PREMIUM, F_REPLAY) is True
     assert has_feature(PRO, F_REPLAY) is False
     assert has_feature(FREE, F_REPLAY) is False
+
+
+# --- POST /replay endpoint ---------------------------------------------------
+
+@pytest.fixture()
+def api(monkeypatch):
+    from backend.api.main import app, replay_cache
+    from backend.api.auth import current_user_id
+    replay_cache.clear()
+    state = {"user": "replay-user"}
+    app.dependency_overrides[current_user_id] = lambda: state["user"]
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    try:
+        yield client
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_replay_endpoint_gated_below_premium(api, monkeypatch):
+    import backend.api.auth as auth
+    import backend.billing.users as users
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
+    monkeypatch.setattr(users, "get_tier", lambda uid: "pro")   # pro lacks F_REPLAY
+    r = api.post("/replay", json={
+        "symbol": "BTCUSDT", "interval": "1h",
+        "as_of": 1704070800, "mode": "copilot", "include_kronos": False,
+    })
+    assert r.status_code == 402
+    assert r.json()["upgrade"] is True
+
+
+def test_replay_endpoint_rejects_future_as_of(api, monkeypatch):
+    import backend.api.auth as auth
+    import backend.billing.users as users
+    import time
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
+    monkeypatch.setattr(users, "get_tier", lambda uid: "premium")
+    r = api.post("/replay", json={
+        "symbol": "BTCUSDT", "interval": "1h",
+        "as_of": int(time.time()),  # now — not in the past
+        "mode": "copilot", "include_kronos": False,
+    })
+    assert r.status_code == 422
+
+
+def test_replay_endpoint_copilot_happy_path(api, monkeypatch):
+    import time as _time
+    import backend.api.auth as auth
+    import backend.billing.users as users
+    from backend.signals import replay as replay_mod
+
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
+    monkeypatch.setattr(users, "get_tier", lambda uid: "premium")
+
+    # 100 context closes then a rising forward window -> bullish call scores correct.
+    # Build the frame ending 2 days ago so as_of passes the endpoint's 90-day window.
+    closes = list(range(1, 101)) + [101, 102, 103, 104, 105]
+    end = pd.to_datetime(int(_time.time()) - 86400, unit="s").floor("h")
+    start = end - pd.Timedelta(hours=len(closes) - 1)
+    df = _df(closes, start=start)
+    as_of = int(df["timestamps"].iloc[99].timestamp())
+    monkeypatch.setattr(replay_mod, "_fetch_window", lambda *a, **k: df)
+
+    class _CL:
+        total_usd = 0.0
+
+    class _R:
+        cost_log = _CL()
+
+        def complete(self, *a, **k):
+            return json.dumps({"lean": "bullish", "conviction": 70, "summary": "s",
+                               "drivers": [], "risks": [], "suggested_invalidation": "x"})
+
+    monkeypatch.setattr("backend.signals.copilot.AIRouter", lambda *a, **k: _R())
+    r = api.post("/replay", json={
+        "symbol": "BTCUSDT", "interval": "1h", "as_of": as_of,
+        "mode": "copilot", "include_kronos": False})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["analysis"]["lean"] == "bullish"
+    assert body["outcome"]["verdict"] == "correct"   # price rose after as_of
+    assert body["outcome"]["move_pct"] > 0
+    assert body["replay"] is True
