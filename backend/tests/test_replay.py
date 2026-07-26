@@ -131,3 +131,12 @@ def test_score_outcome_empty_window_unavailable():
 
     res = replay.score_outcome(100.0, "bullish", _df([]))
     assert res["available"] is False
+
+
+# --- F_REPLAY feature flag ---------------------------------------------------
+
+def test_replay_is_premium_only():
+    from backend.billing import has_feature, F_REPLAY, FREE, PRO, PREMIUM
+    assert has_feature(PREMIUM, F_REPLAY) is True
+    assert has_feature(PRO, F_REPLAY) is False
+    assert has_feature(FREE, F_REPLAY) is False
