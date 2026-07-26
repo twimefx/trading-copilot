@@ -36,8 +36,12 @@ def _clean_db():
     # Recreate schema.
     from backend.journal import store as journal_store
     from backend.billing import users as user_store
+    from backend import alerts as alert_store
+    from backend.signals import history as signal_history
     journal_store.init_db()
     user_store.init_db()
+    alert_store.init_db()
+    signal_history.init_db()
     # Reset shared in-memory guards so per-IP rate limits and the global daily
     # spend cap don't accumulate across tests (they're module-level singletons).
     try:

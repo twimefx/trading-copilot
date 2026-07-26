@@ -18,6 +18,11 @@
 | Institutional Flow Dashboard (funding/OI/L-S/taker flow) | ✅ live (Premium) |
 | AI Strategy Builder (NL → rules → real backtest) | ✅ live (Premium) |
 | Forex (Oanda): Copilot/Debate/Strategy parity + retail position-book flow | ✅ live |
+| Alerts (price + scanner-lean rules → Telegram/email, 15-min scheduler) | ✅ live |
+| Signal track record (every Copilot call logged + honestly scored 24 periods later) | ✅ live |
+| Per-user saved watchlists | ✅ live |
+| Weekly LLM cost digest (Telegram) | ✅ live |
+| Kronos range service (separate Railway service, torch) | ✅ deployed |
 | Clerk auth + Stripe billing + tier quotas | ✅ auth live; Stripe test mode |
 | Monorepo scaffold | ✅ |
 

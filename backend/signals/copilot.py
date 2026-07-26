@@ -164,6 +164,10 @@ def analyze(ctx: MarketContext, router: AIRouter | None = None) -> dict:
 
     result["disclaimer"] = DISCLAIMER
     result["cost_usd"] = round(router.cost_log.total_usd, 5)
+    # Reference price at call time — powers the track record's honest scoring.
+    last_close = ctx.indicators.get("last_close")
+    if isinstance(last_close, (int, float)):
+        result["entry_price"] = last_close
     # Range is authoritative/deterministic — never trust an LLM-invented band.
     result["range_24h"] = _compute_range(ctx)
     # Strip any leaked mid-sentence self-corrections from free-text fields.

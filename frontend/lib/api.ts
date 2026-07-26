@@ -122,6 +122,28 @@ export function useApi() {
       journalUpdate: (id: string, fields: Record<string, any>) =>
         request(`/journal/${id}`, { method: "PATCH", body: JSON.stringify(fields) }),
       journalDelete: (id: string) => request(`/journal/${id}`, { method: "DELETE" }),
+      // Watchlist
+      watchlistGet: () => request<{ symbols: string[] }>("/watchlist"),
+      watchlistPut: (symbols: string[]) =>
+        request<{ symbols: string[] }>("/watchlist", {
+          method: "PUT",
+          body: JSON.stringify({ symbols }),
+        }),
+      // Alerts
+      alertsList: () => request<{ rules: any[] }>("/alerts").then((r) => r.rules ?? []),
+      alertCreate: (payload: { kind: string; config: Record<string, any>; cooldown_s?: number }) =>
+        request("/alerts", { method: "POST", body: JSON.stringify(payload) }),
+      alertUpdate: (id: string, fields: Record<string, any>) =>
+        request(`/alerts/${id}`, { method: "PATCH", body: JSON.stringify(fields) }),
+      alertDelete: (id: string) => request(`/alerts/${id}`, { method: "DELETE" }),
+      alertTest: (id: string) => request(`/alerts/${id}/test`, { method: "POST", body: "{}" }),
+      alertEvents: () => request<{ events: any[] }>("/alerts/events").then((r) => r.events ?? []),
+      // Track record
+      signalStats: () => request("/signals/stats"),
+      signalHistory: (symbol?: string) =>
+        request<{ signals: any[] }>(
+          `/signals/history${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`,
+        ).then((r) => r.signals ?? []),
       request,
     }),
     [request, isSignedIn],

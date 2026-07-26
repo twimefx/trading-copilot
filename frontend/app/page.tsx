@@ -9,6 +9,8 @@ import Portfolio from "@/components/Portfolio";
 import Debate from "@/components/Debate";
 import Flow from "@/components/Flow";
 import Strategy from "@/components/Strategy";
+import Alerts from "@/components/Alerts";
+import TrackRecord from "@/components/TrackRecord";
 import { useApi, MeResponse } from "@/lib/api";
 
 // When Clerk isn't configured the app runs anonymously (no sign-in UI, no tier
@@ -71,10 +73,36 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [upgradePrompt, setUpgradePrompt] = useState(false);
   const [result, setResult] = useState<Analysis | null>(null);
-  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate" | "flow" | "strategy">("copilot");
+  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate" | "flow" | "strategy" | "alerts" | "track">("copilot");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [journalRefresh, setJournalRefresh] = useState(0);
   const [me, setMe] = useState<MeResponse | null>(null);
+  const [watchlist, setWatchlist] = useState<string[]>([]);
+  const [watchlistLoaded, setWatchlistLoaded] = useState(false);
+
+  async function refreshWatchlist() {
+    try {
+      const r = await api.watchlistGet();
+      setWatchlist(r.symbols);
+    } catch {
+      /* anonymous/open mode or backend cold — presets still work */
+    } finally {
+      setWatchlistLoaded(true);
+    }
+  }
+
+  async function toggleWatch(sym: string) {
+    const next = watchlist.includes(sym)
+      ? watchlist.filter((s) => s !== sym)
+      : [...watchlist, sym];
+    setWatchlist(next);                    // optimistic
+    try {
+      const r = await api.watchlistPut(next);
+      setWatchlist(r.symbols);
+    } catch {
+      /* keep optimistic state in open mode */
+    }
+  }
 
   async function refreshMe() {
     try {
@@ -85,7 +113,10 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (api.isSignedIn) refreshMe();
+    if (api.isSignedIn) {
+      refreshMe();
+      refreshWatchlist();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api.isSignedIn]);
 
@@ -204,7 +235,7 @@ export default function Home() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-white/10">
-        {(["copilot", "scanner", "journal", "portfolio", "debate", "flow", "strategy"] as const).map((t) => (
+        {(["copilot", "scanner", "journal", "portfolio", "debate", "flow", "strategy", "alerts", "track"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setView(t)}
@@ -212,7 +243,7 @@ export default function Home() {
               view === t ? "border-accent text-white" : "border-transparent text-neutral hover:text-white"
             }`}
           >
-            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : t === "portfolio" ? "Portfolio" : t === "debate" ? "Debate" : t === "flow" ? "Flow" : "Strategy"}
+            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : t === "portfolio" ? "Portfolio" : t === "debate" ? "Debate" : t === "flow" ? "Flow" : t === "strategy" ? "Strategy" : t === "alerts" ? "Alerts" : "Track Record"}
           </button>
         ))}
       </div>
@@ -226,6 +257,10 @@ export default function Home() {
       {view === "flow" && <Flow api={api} symbol={symbol} period={interval} />}
 
       {view === "strategy" && <Strategy api={api} symbol={symbol} interval={interval} />}
+
+      {view === "alerts" && <Alerts api={api} watchlist={watchlist} />}
+
+      {view === "track" && <TrackRecord api={api} />}
 
       {view === "scanner" && (
         <Scanner
@@ -243,28 +278,64 @@ export default function Home() {
       {/* Controls */}
       <div className="bg-panel rounded-2xl border border-white/5 p-5 mb-6">
         <div className="flex flex-wrap gap-2 mb-3">
+          {watchlistLoaded && watchlist.length > 0 && (
+            <>
+              {watchlist.map((p) => (
+                <button
+                  key={`wl-${p}`}
+                  onClick={() => setSymbol(p)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                    symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
+                  }`}
+                >
+                  <span className="text-accent mr-1">★</span>{p.replace("_", "/")}
+                </button>
+              ))}
+              <span className="w-px bg-white/10 mx-1" />
+            </>
+          )}
           {CRYPTO_PRESETS.map((p) => (
-            <button
-              key={p}
-              onClick={() => setSymbol(p)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
-              }`}
-            >
-              {p}
-            </button>
+            <span key={p} className="relative inline-flex">
+              <button
+                onClick={() => setSymbol(p)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                  symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
+                }`}
+              >
+                {p}
+              </button>
+              <button
+                onClick={() => toggleWatch(p)}
+                title={watchlist.includes(p) ? "Remove from watchlist" : "Save to watchlist"}
+                className={`absolute -top-1.5 -right-1.5 text-[10px] w-4 h-4 rounded-full leading-none ${
+                  watchlist.includes(p) ? "text-accent" : "text-neutral/50 hover:text-accent"
+                }`}
+              >
+                {watchlist.includes(p) ? "★" : "☆"}
+              </button>
+            </span>
           ))}
           <span className="w-px bg-white/10 mx-1" />
           {FOREX_PRESETS.map((p) => (
-            <button
-              key={p}
-              onClick={() => setSymbol(p)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
-              }`}
-            >
-              {p.replace("_", "/")}
-            </button>
+            <span key={p} className="relative inline-flex">
+              <button
+                onClick={() => setSymbol(p)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                  symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
+                }`}
+              >
+                {p.replace("_", "/")}
+              </button>
+              <button
+                onClick={() => toggleWatch(p)}
+                title={watchlist.includes(p) ? "Remove from watchlist" : "Save to watchlist"}
+                className={`absolute -top-1.5 -right-1.5 text-[10px] w-4 h-4 rounded-full leading-none ${
+                  watchlist.includes(p) ? "text-accent" : "text-neutral/50 hover:text-accent"
+                }`}
+              >
+                {watchlist.includes(p) ? "★" : "☆"}
+              </button>
+            </span>
           ))}
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -274,6 +345,13 @@ export default function Home() {
             className="bg-panelhi rounded-lg px-3 py-2 text-sm flex-1 min-w-[140px] outline-none focus:ring-1 ring-accent"
             placeholder="Symbol e.g. BTCUSDT"
           />
+          <button
+            onClick={() => toggleWatch(symbol)}
+            title={watchlist.includes(symbol) ? "Remove from watchlist" : "Save to watchlist"}
+            className={`text-lg leading-none px-1 ${watchlist.includes(symbol) ? "text-accent" : "text-neutral/40 hover:text-accent"}`}
+          >
+            {watchlist.includes(symbol) ? "★" : "☆"}
+          </button>
           <select
             value={interval}
             onChange={(e) => setIntervalVal(e.target.value)}

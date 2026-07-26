@@ -41,6 +41,9 @@ journal.db
 .vscode/
 *.swp
 
+# TS incremental build info
+*.tsbuildinfo
+
 # Kronos clone (vendored separately)
 vendor/Kronos/
 .venv-prod/

@@ -178,6 +178,28 @@ gracefully to the ATR estimate — Kronos is never a hard dependency.
 
 ---
 
+## 5. Alerts + cost digest (scheduler)
+
+Alerts are user-created rules (`POST /alerts`) evaluated on a schedule. Delivery is
+Telegram and/or SMTP email; a rule with neither just logs an event in-app.
+
+Backend env vars:
+
+| Variable | Purpose |
+|---|---|
+| `ALERT_SCHEDULER_KEY` | shared secret the scheduler POSTs to `/alerts/check` + `/admin/cost-digest` |
+| `ALERT_TELEGRAM_BOT_TOKEN` | bot token for Telegram delivery |
+| `ALERT_TELEGRAM_DEFAULT_CHAT_ID` | fallback chat for rules without their own |
+| `ALERT_SMTP_URL` / `ALERT_EMAIL_FROM` | (optional) `smtp://user:pass@host:587` + sender |
+| `ALERT_DIGEST_EMAIL` | (optional) weekly cost-digest recipient |
+
+The evaluator runs every 15 min from a Hermes cron script (`copilot_scheduler.sh`),
+which also triggers the Monday cost digest. The signal track record
+(`GET /signals/history`, `/signals/stats`) is public and scores every Copilot call
+24 periods after the fact — no cherry-picking.
+
+---
+
 ## Trade Journal (persistence)
 
 The journal lets users save Copilot analyses and track trade outcomes (status,

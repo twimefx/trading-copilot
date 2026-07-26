@@ -42,14 +42,18 @@ from backend.api.guards import (
 from backend.billing import PRO, PREMIUM, F_JOURNAL, F_DEBATE, F_FLOW, F_STRATEGY, get_tier as tier_config
 from backend.billing import users as user_store
 from backend.journal import store as journal_store
+from backend import alerts as alert_store
+from backend.signals import history as signal_history
 
 logger = logging.getLogger("copilot.api")
 
-app = FastAPI(title="AI Trading Copilot", version="0.2.0")
+app = FastAPI(title="AI Trading Copilot", version="0.3.0")
 
 # Initialize DBs once at import (idempotent — safe on every worker boot).
 journal_store.init_db()
 user_store.init_db()
+alert_store.init_db()
+signal_history.init_db()
 
 # CORS — set FRONTEND_ORIGIN in prod (comma-separated allowed origins).
 # allow_credentials stays False; auth travels in the Authorization header, not cookies.
@@ -109,12 +113,24 @@ class StrategyRequest(BaseModel):
     interval: str = "1h"
 
 
+@app.get("/", include_in_schema=False)
+def root():
+    """Root route — the API is meant to be consumed via the frontend/proxy,
+    so point browsers somewhere useful instead of a bare 404."""
+    return {
+        "service": "trading-copilot",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
 @app.get("/health")
 def health():
     return {
         "status": "ok",
         "service": "trading-copilot",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "spend_today_usd": spend_guard.spent_today,
         "spend_cap_usd": spend_guard.cap,
     }
@@ -206,6 +222,21 @@ def copilot(req: CopilotRequest, request: Request,
     spend_guard.add(float(result.get("cost_usd") or 0.0))
     # Count the paid call against the user's daily quota (only on a real LLM call).
     user_store.incr_copilot_call(user_id)
+    # Persist spend (survives restarts) + log the directional call to the track record.
+    cost = float(result.get("cost_usd") or 0.0)
+    try:
+        user_store.record_spend(user_id, "copilot", cost)
+        from backend.data.providers import asset_class as _asset_class
+        entry_price = result.get("entry_price")
+        if not isinstance(entry_price, (int, float)):
+            entry_price = None
+        signal_history.log_signal(
+            symbol=sym, interval=req.interval, asset_class=_asset_class(sym),
+            lean=result.get("lean"), conviction=result.get("conviction"),
+            entry_price=entry_price,
+        )
+    except Exception:  # noqa: BLE001 — logging must never break the paid call
+        logger.exception("post-copilot logging failed")
     copilot_cache.set(cache_key, result)
     return {**result, "cached": False}
 
@@ -668,3 +699,153 @@ def journal_delete(entry_id: str, user_id: str = Depends(require_journal_user)):
     if not journal_store.delete_entry(user_id, entry_id):
         raise HTTPException(status_code=404, detail="Entry not found.")
     return JSONResponse(status_code=204, content=None)
+
+
+# --- Watchlists ---------------------------------------------------------------
+
+class WatchlistPut(BaseModel):
+    symbols: list[str]
+
+
+@app.get("/watchlist")
+def watchlist_get(user_id: str = Depends(current_user_id)):
+    return {"symbols": user_store.get_watchlist(user_id)}
+
+
+@app.put("/watchlist")
+def watchlist_put(body: WatchlistPut, user_id: str = Depends(current_user_id)):
+    try:
+        symbols = user_store.set_watchlist(user_id, body.symbols)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"symbols": symbols}
+
+
+# --- Alerts -------------------------------------------------------------------
+
+class AlertRuleCreate(BaseModel):
+    kind: str                      # price_above | price_below | scanner_lean
+    config: dict
+    cooldown_s: int = 3600
+
+
+class AlertRuleUpdate(BaseModel):
+    active: bool | None = None
+    config: dict | None = None
+    cooldown_s: int | None = None
+
+
+class AlertCheckRequest(BaseModel):
+    scheduler_key: str | None = None
+
+
+@app.get("/alerts")
+def alerts_list(user_id: str = Depends(current_user_id)):
+    return {"rules": alert_store.list_rules(user_id)}
+
+
+@app.post("/alerts", status_code=201)
+def alerts_create(body: AlertRuleCreate, user_id: str = Depends(current_user_id)):
+    try:
+        return alert_store.create_rule(
+            user_id, body.kind.strip().lower(), body.config, body.cooldown_s
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@app.patch("/alerts/{rule_id}")
+def alerts_update(rule_id: str, body: AlertRuleUpdate,
+                  user_id: str = Depends(current_user_id)):
+    try:
+        rule = alert_store.update_rule(
+            user_id, rule_id, active=body.active,
+            config=body.config, cooldown_s=body.cooldown_s,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found.")
+    return rule
+
+
+@app.delete("/alerts/{rule_id}", status_code=204)
+def alerts_delete(rule_id: str, user_id: str = Depends(current_user_id)):
+    if not alert_store.delete_rule(user_id, rule_id):
+        raise HTTPException(status_code=404, detail="Rule not found.")
+    return JSONResponse(status_code=204, content=None)
+
+
+@app.get("/alerts/events")
+def alerts_events(user_id: str = Depends(current_user_id)):
+    return {"events": alert_store.list_events(user_id)}
+
+
+@app.post("/alerts/{rule_id}/test")
+def alerts_test(rule_id: str, user_id: str = Depends(current_user_id)):
+    """Send a test notification for one rule (ignores cooldown, honest condition)."""
+    if alert_store.get_rule(user_id, rule_id) is None:
+        raise HTTPException(status_code=404, detail="Rule not found.")
+    return alert_store.evaluate_rules(trigger_test_rule_id=rule_id)
+
+
+@app.post("/alerts/check")
+def alerts_check(body: AlertCheckRequest):
+    """Scheduler entry point — evaluates every active rule once.
+
+    Guarded by ALERT_SCHEDULER_KEY when set (Hermes cron / any external
+    scheduler passes it in the body). When unset (dev), the endpoint is open —
+    same trust model as the rest of the app in open mode.
+    """
+    expected = os.environ.get("ALERT_SCHEDULER_KEY", "").strip()
+    if expected and body.scheduler_key != expected:
+        raise HTTPException(status_code=403, detail="Invalid scheduler key.")
+    return alert_store.evaluate_rules()
+
+
+# --- Signal track record --------------------------------------------------------
+
+@app.get("/signals/history")
+def signals_history(symbol: str | None = None, limit: int = 100):
+    """Public track record — every logged Copilot call and its scored outcome."""
+    signal_history.resolve_pending()
+    return {"signals": signal_history.list_signals(symbol, limit)}
+
+
+@app.get("/signals/stats")
+def signals_stats():
+    signal_history.resolve_pending()
+    return signal_history.stats()
+
+
+# --- Cost digest (scheduler) -----------------------------------------------------
+
+class CostDigestRequest(BaseModel):
+    scheduler_key: str | None = None
+
+
+@app.post("/admin/cost-digest")
+def cost_digest(body: CostDigestRequest):
+    """Weekly LLM-spend digest. Delivers via the same alert channels; safe to
+    call any time (the scheduler calls it weekly)."""
+    expected = os.environ.get("ALERT_SCHEDULER_KEY", "").strip()
+    if expected and body.scheduler_key != expected:
+        raise HTTPException(status_code=403, detail="Invalid scheduler key.")
+    days = user_store.spend_by_day(7)
+    total = round(sum(d["usd"] for d in days), 4)
+    lines = [f"LLM spend digest — last 7 days (total ${total:.2f} of "
+             f"${spend_guard.cap:.0f}/day cap):"]
+    for d in days:
+        lines.append(f"  {d['day']}: ${d['usd']:.2f} across {d['calls']} calls")
+    if not days:
+        lines.append("  (no recorded spend yet)")
+    message = "\n".join(lines)
+    delivered = []
+    import os as _os
+    chat_id = _os.environ.get("ALERT_TELEGRAM_DEFAULT_CHAT_ID", "").strip()
+    if chat_id and alert_store._notify_telegram(chat_id, message):
+        delivered.append("telegram")
+    email = _os.environ.get("ALERT_DIGEST_EMAIL", "").strip()
+    if email and alert_store._notify_email(email, "Trading Copilot weekly cost digest", message):
+        delivered.append("email")
+    return {"days": days, "total_usd": total, "delivered": delivered}
