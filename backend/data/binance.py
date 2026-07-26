@@ -79,6 +79,44 @@ def fetch_klines(symbol: str = "BTCUSDT", interval: str = "1h", limit: int = 500
     return df
 
 
+def fetch_klines_range(symbol: str, interval: str,
+                       start_ms: int, end_ms: int) -> pd.DataFrame:
+    """Fetch historical OHLCV candles for [start_ms, end_ms] (epoch milliseconds).
+
+    Pages through Binance's startTime/endTime klines (max 1000/request) until the
+    window is covered. Same columns as fetch_klines. Raises UnknownSymbolError on
+    a bad symbol (400), matching fetch_klines.
+    """
+    rows: list[dict] = []
+    cursor = start_ms
+    while cursor < end_ms:
+        url = (f"{BINANCE_BASE}?symbol={symbol}&interval={interval}"
+               f"&startTime={cursor}&endTime={end_ms}&limit=1000")
+        req = urllib.request.Request(url, headers={"User-Agent": "trading-copilot/0.1"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code == 400:
+                raise UnknownSymbolError(symbol, "Binance") from e
+            raise
+        if not raw:
+            break
+        for k in raw:
+            rows.append({
+                "timestamps": pd.to_datetime(k[0], unit="ms"),
+                "open": float(k[1]), "high": float(k[2]),
+                "low": float(k[3]), "close": float(k[4]),
+                "volume": float(k[5]), "amount": float(k[7]),
+            })
+        last_open = raw[-1][0]
+        if len(raw) < 1000:
+            break
+        cursor = last_open + 1
+    df = pd.DataFrame(rows, columns=["timestamps", *_OHLCV_COLS])
+    return df.drop_duplicates(subset="timestamps").sort_values("timestamps").reset_index(drop=True)
+
+
 def _get_json(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": "trading-copilot/0.1"})
     with urllib.request.urlopen(req, timeout=30) as resp:

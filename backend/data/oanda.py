@@ -80,6 +80,43 @@ def fetch_klines(symbol: str = "EUR_USD", interval: str = "1h", limit: int = 400
     return pd.DataFrame(rows, columns=["timestamps", "open", "high", "low", "close", "volume", "amount"])
 
 
+def fetch_klines_range(symbol: str, interval: str,
+                       start_ms: int, end_ms: int) -> pd.DataFrame:
+    """Historical OHLCV for [start_ms, end_ms] (epoch ms) via Oanda's from/to.
+
+    Same return shape as binance.fetch_klines_range. Skips incomplete candles.
+    """
+    instrument = normalize_instrument(symbol)
+    gran = _GRAN.get(interval, "H1")
+    fmt = "%Y-%m-%dT%H:%M:%S.000000000Z"
+    frm = pd.to_datetime(start_ms, unit="ms").strftime(fmt)
+    to = pd.to_datetime(end_ms, unit="ms").strftime(fmt)
+    url = (f"{_base_url()}/v3/instruments/{instrument}/candles"
+           f"?from={frm}&to={to}&granularity={gran}&price=M")
+    req = urllib.request.Request(url, headers=_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 404):
+            raise UnknownSymbolError(symbol, "Oanda") from e
+        raise
+
+    rows = []
+    for c in data.get("candles", []):
+        if not c.get("complete", True):
+            continue
+        mid = c["mid"]
+        vol = float(c.get("volume", 0))
+        rows.append({
+            "timestamps": pd.to_datetime(c["time"]).tz_localize(None),
+            "open": float(mid["o"]), "high": float(mid["h"]),
+            "low": float(mid["l"]), "close": float(mid["c"]),
+            "volume": vol, "amount": vol,
+        })
+    return pd.DataFrame(rows, columns=["timestamps", "open", "high", "low", "close", "volume", "amount"])
+
+
 def fetch_funding_rate(symbol: str = "EUR_USD") -> dict:
     """Spot FX has no perp funding. Return unavailable (Copilot handles gracefully)."""
     return {"funding_rate": None, "available": False, "note": "n/a for spot forex"}
