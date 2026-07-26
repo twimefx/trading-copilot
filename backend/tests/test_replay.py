@@ -67,6 +67,7 @@ def test_oanda_fetch_klines_range_shape(monkeypatch):
         def __exit__(self, *a): return False
         def read(self): return json.dumps(fake).encode()
 
+    monkeypatch.setenv("OANDA_API_TOKEN", "test-token")
     monkeypatch.setattr(oanda.urllib.request, "urlopen", lambda *a, **k: _Resp())
     df = oanda.fetch_klines_range("EUR_USD", "1h",
                                   start_ms=1704067200000, end_ms=1704074400000)
