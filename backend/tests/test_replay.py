@@ -72,3 +72,62 @@ def test_oanda_fetch_klines_range_shape(monkeypatch):
     df = oanda.fetch_klines_range("EUR_USD", "1h",
                                   start_ms=1704067200000, end_ms=1704074400000)
     assert list(df["close"]) == [1.105, 1.110]
+
+
+# --- build_replay_context ----------------------------------------------------
+
+def test_build_replay_context_truncates_at_as_of(monkeypatch):
+    from backend.signals import replay
+
+    # 100 hourly closes; as_of at candle index 79 (80 candles after truncation —
+    # above the 60 minimum). Provider returns the whole frame; the context
+    # builder must truncate at as_of before computing indicators, so last_close
+    # is the close AT as_of — never the future.
+    df = _df(list(range(1, 101)))
+    as_of = int(df["timestamps"].iloc[79].timestamp())
+
+    monkeypatch.setattr(replay, "_fetch_window", lambda sym, iv, a, b: df)
+    ctx = replay.build_replay_context("BTCUSDT", "1h", as_of, include_kronos=False)
+    assert ctx.symbol == "BTCUSDT"
+    assert ctx.indicators["last_close"] == pytest.approx(df["close"].iloc[79])
+    # Positioning honestly unavailable in replay.
+    assert ctx.funding["available"] is False
+    assert ctx.open_interest["available"] is False
+
+
+def test_build_replay_context_rejects_thin_history(monkeypatch):
+    from backend.signals import replay
+
+    df = _df(list(range(1, 31)))  # only 30 candles — under the 60 minimum
+    as_of = int(df["timestamps"].iloc[20].timestamp())
+    monkeypatch.setattr(replay, "_fetch_window", lambda sym, iv, a, b: df)
+    with pytest.raises(ValueError, match="Not enough history"):
+        replay.build_replay_context("BTCUSDT", "1h", as_of, include_kronos=False)
+
+
+# --- score_outcome -----------------------------------------------------------
+
+def test_score_outcome_bullish_correct_when_price_rises():
+    from backend.signals import replay
+
+    outcome = _df([110, 115, 120])
+    res = replay.score_outcome(100.0, "bullish", outcome)
+    assert res["available"] is True
+    assert res["verdict"] == "correct"
+    assert res["final_close"] == 120.0
+    assert res["move_pct"] == pytest.approx(20.0)
+
+
+def test_score_outcome_bearish_incorrect_when_price_rises():
+    from backend.signals import replay
+
+    outcome = _df([110, 115, 120])
+    res = replay.score_outcome(100.0, "bearish", outcome)
+    assert res["verdict"] == "incorrect"
+
+
+def test_score_outcome_empty_window_unavailable():
+    from backend.signals import replay
+
+    res = replay.score_outcome(100.0, "bullish", _df([]))
+    assert res["available"] is False
