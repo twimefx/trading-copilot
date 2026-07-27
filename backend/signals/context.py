@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.request
 from dataclasses import asdict, dataclass, field
 
 from backend.data.providers import get_provider, asset_class
@@ -60,17 +61,47 @@ def build_market_context(
     return ctx
 
 
+def _runpod_forecast(url: str, df) -> dict:
+    """Call a RunPod serverless endpoint (runsync) and unwrap the job envelope.
+
+    RunPod returns {"status": ..., "output": {...}}; the handler's forecast dict
+    (or {"error": ...}) lives under "output". Activated by KRONOS_RUNPOD=1 with
+    KRONOS_SERVICE_URL = the endpoint's /runsync URL and KRONOS_API_KEY set.
+    """
+    payload = {"input": {
+        "ohlcv": json.loads(df.to_json(orient="records", date_format="iso")),
+        "pred_len": 24,
+        "sample_count": int(os.environ.get("KRONOS_SAMPLE_COUNT", "5")),
+    }}
+    req = urllib.request.Request(
+        url.rstrip("/"), data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {os.environ.get('KRONOS_API_KEY', '')}"},
+    )
+    timeout = float(os.environ.get("KRONOS_TIMEOUT", "120"))
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = json.loads(resp.read().decode())
+    output = body.get("output")
+    if body.get("status") != "COMPLETED" or not isinstance(output, dict):
+        return {"available": False, "note": f"RunPod job status: {body.get('status')}"}
+    if "error" in output:
+        return {"available": False, "note": f"Kronos error: {str(output['error'])[:80]}"}
+    return output
+
+
 def _fetch_kronos_range(df) -> dict:
     """Get a Kronos range, preferring the remote service, then local torch, then degrade.
 
     The lean production backend has NO torch, so the normal path is the HTTP service
-    at KRONOS_SERVICE_URL. If that's unset or unreachable, we degrade gracefully and
+    at KRONOS_SERVICE_URL (plain FastAPI, or a RunPod serverless endpoint when
+    KRONOS_RUNPOD=1). If that's unset or unreachable, we degrade gracefully and
     the copilot's _compute_range falls back to an honest ATR estimate.
     """
     url = os.environ.get("KRONOS_SERVICE_URL")
     if url:
         try:
-            import urllib.request
+            if os.environ.get("KRONOS_RUNPOD") == "1":
+                return _runpod_forecast(url, df)
 
             payload = {
                 "ohlcv": json.loads(df.to_json(orient="records", date_format="iso")),

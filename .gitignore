@@ -53,3 +53,6 @@ vendor/Kronos/
 dogfood-output/
 
 .cksk
+
+# RunPod API key (Kronos GPU service)
+.runpod_key

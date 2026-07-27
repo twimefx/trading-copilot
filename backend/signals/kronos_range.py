@@ -21,13 +21,23 @@ sys.path.insert(0, _VENDOR)
 _predictor = None  # cached singleton
 
 
+def _device() -> str:
+    """Torch device: 'cpu' by default (lean/local/test), 'cuda' on the GPU host.
+
+    Read at predictor-build time (not import time) so tests can override the env
+    and so a stale module-level value can't pin the wrong device. Set
+    KRONOS_DEVICE=cuda on the GPU serverless worker.
+    """
+    return os.environ.get("KRONOS_DEVICE", "cpu")
+
+
 def _get_predictor():
     global _predictor
     if _predictor is None:
         from model import Kronos, KronosTokenizer, KronosPredictor
         tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
         model = Kronos.from_pretrained("NeoQuasar/Kronos-small")
-        _predictor = KronosPredictor(model, tokenizer, max_context=512, device="cpu")
+        _predictor = KronosPredictor(model, tokenizer, max_context=512, device=_device())
     return _predictor
 
 

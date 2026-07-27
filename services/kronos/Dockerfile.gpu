@@ -1,0 +1,40 @@
+# Kronos Range Service — GPU (CUDA) build for RunPod Serverless.
+#
+# Same service as services/kronos/Dockerfile (CPU), but on a CUDA base image with
+# a GPU torch wheel and a RunPod serverless handler. Build context = repo root:
+#   docker build -f services/kronos/Dockerfile.gpu .
+# RunPod's hosted builder does this from the GitHub repo (no local daemon needed).
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps. The base image already ships torch+CUDA, so requirements-gpu.txt
+# omits torch (keeps the wheel aligned with the base image's CUDA runtime).
+COPY services/kronos/requirements-gpu.txt .
+RUN pip install --no-cache-dir -r requirements-gpu.txt
+
+# Clone the Kronos model code (gitignored in our repo, vendored separately).
+RUN git clone --depth 1 https://github.com/shiyu-coder/Kronos.git vendor/Kronos
+
+# Shared backend modules the service reuses (the range adapter + its data deps).
+COPY backend/__init__.py backend/__init__.py
+COPY backend/signals/__init__.py backend/signals/kronos_range.py backend/signals/
+COPY backend/data backend/data
+
+# The serverless handler.
+COPY services/kronos/handler.py services/kronos/handler.py
+
+ENV PYTHONUNBUFFERED=1
+# Run on the GPU; weights pre-downloaded at build so cold starts are fast.
+ENV KRONOS_DEVICE=cuda
+RUN python -c "import sys; sys.path.insert(0,'vendor/Kronos'); \
+from model import Kronos, KronosTokenizer; \
+KronosTokenizer.from_pretrained('NeoQuasar/Kronos-Tokenizer-base'); \
+Kronos.from_pretrained('NeoQuasar/Kronos-small'); \
+print('Kronos weights cached')"
+
+# RunPod serverless entrypoint: starts the worker, calls handler.handler(event).
+CMD ["python", "-u", "services/kronos/handler.py"]
