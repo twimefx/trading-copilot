@@ -67,6 +67,10 @@ def forecast_range(
     Returns a dict describing the expected range — NOT a direction call.
     """
     df = df.reset_index(drop=True)
+    # Timestamps may arrive as JSON strings (from the HTTP service / RunPod
+    # handler). Coerce to real datetimes up front — the Kronos predictor uses .dt
+    # accessors on the timestamp series, which fail on object/string dtype.
+    df["timestamps"] = pd.to_datetime(df["timestamps"])
     lookback = min(lookback, len(df) - 1)
     cols = ["open", "high", "low", "close", "volume", "amount"]
 
