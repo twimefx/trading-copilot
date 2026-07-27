@@ -12,6 +12,7 @@ import Strategy from "@/components/Strategy";
 import Alerts from "@/components/Alerts";
 import TrackRecord from "@/components/TrackRecord";
 import Replay from "@/components/Replay";
+import Admin from "@/components/Admin";
 import { useApi, MeResponse } from "@/lib/api";
 
 // When Clerk isn't configured the app runs anonymously (no sign-in UI, no tier
@@ -74,7 +75,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [upgradePrompt, setUpgradePrompt] = useState(false);
   const [result, setResult] = useState<Analysis | null>(null);
-  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate" | "flow" | "strategy" | "alerts" | "track" | "replay">("copilot");
+  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate" | "flow" | "strategy" | "alerts" | "track" | "replay" | "admin">("copilot");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [journalRefresh, setJournalRefresh] = useState(0);
   const [me, setMe] = useState<MeResponse | null>(null);
@@ -235,19 +236,26 @@ export default function Home() {
         {/* signed-in app */}
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6 border-b border-white/10">
-        {(["copilot", "scanner", "journal", "portfolio", "debate", "flow", "strategy", "alerts", "track", "replay"] as const).map((t) => (
+      <div className="flex gap-2 mb-6 border-b border-white/10 flex-wrap">
+        {((): readonly (typeof view)[] => {
+          const base = ["copilot", "scanner", "journal", "portfolio", "debate", "flow", "strategy", "alerts", "track", "replay"] as const;
+          return me?.is_admin ? [...base, "admin" as const] : base;
+        })().map((t) => (
           <button
             key={t}
             onClick={() => setView(t)}
             className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
-              view === t ? "border-accent text-white" : "border-transparent text-neutral hover:text-white"
+              view === t
+                ? t === "admin" ? "border-accent text-accent" : "border-accent text-white"
+                : "border-transparent text-neutral hover:text-white"
             }`}
           >
-            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : t === "portfolio" ? "Portfolio" : t === "debate" ? "Debate" : t === "flow" ? "Flow" : t === "strategy" ? "Strategy" : t === "alerts" ? "Alerts" : t === "replay" ? "Replay" : "Track Record"}
+            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : t === "portfolio" ? "Portfolio" : t === "debate" ? "Debate" : t === "flow" ? "Flow" : t === "strategy" ? "Strategy" : t === "alerts" ? "Alerts" : t === "replay" ? "Replay" : t === "admin" ? "Admin" : "Track Record"}
           </button>
         ))}
       </div>
+
+      {view === "admin" && me?.is_admin && <Admin api={api} />}
 
       {view === "journal" && <Journal api={api} refreshKey={journalRefresh} />}
 

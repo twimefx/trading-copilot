@@ -93,6 +93,27 @@ def require_journal_user(user_id: str = Depends(current_user_id)) -> str:
     return user_id
 
 
+# Bootstrap admin ids from env (comma-separated) — lets a first admin exist before
+# any DB row carries the flag, so you can grant admin to others via the panel.
+_ADMIN_IDS_ENV = {a.strip() for a in
+                  os.environ.get("ADMIN_USER_IDS", "").split(",") if a.strip()}
+
+
+def require_admin(user_id: str = Depends(current_user_id)) -> str:
+    """Dependency: authenticated user who is an admin (env list OR DB flag).
+
+    In open mode (Clerk unconfigured) there is no per-user identity to gate, so
+    admin endpoints are treated as reachable only in that dev/anonymous context —
+    mirroring the rest of the app's open-mode behaviour. With auth on, a non-admin
+    gets 403.
+    """
+    if not auth_mod.AUTH_ENABLED:
+        return user_id
+    if user_id in _ADMIN_IDS_ENV or user_store.is_admin(user_id):
+        return user_id
+    raise HTTPException(status_code=403, detail="Admin access required.")
+
+
 class ScanRequest(BaseModel):
     symbols: list[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
     interval: str = "1h"
@@ -140,13 +161,16 @@ def health():
 @app.get("/me")
 def me(user_id: str = Depends(current_user_id)):
     """Current user's entitlement + today's usage — powers the UI's tier badge/quota."""
-    tier_name = user_store.get_tier(user_id)
+    u = user_store.get_or_create_user(user_id)
+    tier_name = u["tier"]
     tier = tier_config(tier_name)
     used = user_store.copilot_calls_today(user_id)
-    quota = tier.daily_copilot_quota
+    quota = user_store.effective_copilot_quota(user_id, tier.daily_copilot_quota)
     return {
         "user_id": user_id,
         "tier": tier_name,
+        "is_admin": (user_id in _ADMIN_IDS_ENV) or bool(u.get("is_admin")),
+        "bonus_credits": u.get("bonus_credits", 0),
         "daily_copilot_quota": quota,
         "copilot_calls_today": used,
         "copilot_calls_remaining": (None if quota < 0 else max(quota - used, 0)),
@@ -176,17 +200,19 @@ def copilot(req: CopilotRequest, request: Request,
     #    daily spend cap (step 4) is the sole cost guard, matching the pre-auth app.
     tier = tier_config(user_store.get_tier(user_id))
     if auth_mod.AUTH_ENABLED and tier.daily_copilot_quota >= 0:
+        effective_quota = user_store.effective_copilot_quota(
+            user_id, tier.daily_copilot_quota)
         used = user_store.copilot_calls_today(user_id)
-        if used >= tier.daily_copilot_quota:
+        if used >= effective_quota:
             return JSONResponse(
                 status_code=402,  # Payment Required — upgrade to continue
                 content={
                     "detail": (
                         f"Daily limit reached for the {tier.name} plan "
-                        f"({tier.daily_copilot_quota}/day). Upgrade for more."
+                        f"({effective_quota}/day). Upgrade for more."
                     ),
                     "tier": tier.name,
-                    "quota": tier.daily_copilot_quota,
+                    "quota": effective_quota,
                     "upgrade": True,
                 },
             )
@@ -950,3 +976,136 @@ def cost_digest(body: CostDigestRequest):
     if email and alert_store._notify_email(email, "Trading Copilot weekly cost digest", message):
         delivered.append("email")
     return {"days": days, "total_usd": total, "delivered": delivered}
+
+
+# --- Admin panel ---------------------------------------------------------------
+
+class AdminTierUpdate(BaseModel):
+    tier: str
+
+
+class AdminCreditsUpdate(BaseModel):
+    delta: int  # +/- credits to grant (funding) or revoke
+
+
+class AdminProfileUpdate(BaseModel):
+    email: str | None = None
+    note: str | None = None
+    is_admin: bool | None = None
+
+
+class AdminUserCreate(BaseModel):
+    user_id: str
+    email: str | None = None
+    tier: str = "free"
+
+
+@app.get("/admin/stats")
+def admin_stats(admin_id: str = Depends(require_admin)):
+    """Header aggregates for the admin dashboard."""
+    counts = user_store.count_users()
+    counts["spend_today_usd"] = spend_guard.spent_today
+    counts["spend_cap_usd"] = spend_guard.cap
+    return counts
+
+
+@app.get("/admin/users")
+def admin_users(search: str | None = None, limit: int = 200, offset: int = 0,
+                admin_id: str = Depends(require_admin)):
+    return {"users": user_store.list_users(search, limit, offset)}
+
+
+@app.post("/admin/users", status_code=201)
+def admin_create_user(body: AdminUserCreate, admin_id: str = Depends(require_admin)):
+    """Pre-provision a user row (e.g. grant access before their first login)."""
+    uid = body.user_id.strip()
+    if not uid:
+        raise HTTPException(status_code=422, detail="user_id required.")
+    u = user_store.get_or_create_user(uid)
+    if body.tier and body.tier != u["tier"]:
+        try:
+            user_store.set_tier(uid, body.tier)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    if body.email:
+        user_store.set_email(uid, body.email)
+    user_store.log_admin_action(admin_id, "create_user", uid,
+                                f"tier={body.tier} email={body.email}")
+    return user_store.get_or_create_user(uid)
+
+
+@app.get("/admin/users/{user_id}")
+def admin_get_user(user_id: str, admin_id: str = Depends(require_admin)):
+    u = user_store.get_or_create_user(user_id)
+    u["copilot_calls_today"] = user_store.copilot_calls_today(user_id)
+    tier = tier_config(u["tier"])
+    u["daily_copilot_quota"] = user_store.effective_copilot_quota(
+        user_id, tier.daily_copilot_quota)
+    return u
+
+
+@app.post("/admin/users/{user_id}/tier")
+def admin_set_tier(user_id: str, body: AdminTierUpdate,
+                   admin_id: str = Depends(require_admin)):
+    """Manually upgrade/downgrade a user's tier (e.g. grant Premium)."""
+    tier = body.tier.strip().lower()
+    try:
+        old = user_store.get_tier(user_id)
+        user_store.set_tier(user_id, tier)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    user_store.log_admin_action(admin_id, "set_tier", user_id, f"{old} -> {tier}")
+    return {"user_id": user_id, "tier": tier, "previous": old}
+
+
+@app.post("/admin/users/{user_id}/credits")
+def admin_fund_credits(user_id: str, body: AdminCreditsUpdate,
+                       admin_id: str = Depends(require_admin)):
+    """Fund (or debit) a user's bonus Copilot credits — the 'fund user' lever."""
+    new_bal = user_store.add_credits(user_id, body.delta)
+    user_store.log_admin_action(admin_id, "fund_credits", user_id,
+                                f"delta={body.delta:+d} new_balance={new_bal}")
+    return {"user_id": user_id, "bonus_credits": new_bal, "delta": body.delta}
+
+
+@app.post("/admin/users/{user_id}/profile")
+def admin_update_profile(user_id: str, body: AdminProfileUpdate,
+                         admin_id: str = Depends(require_admin)):
+    """Update email / note / admin flag for a user."""
+    changed = []
+    if body.email is not None:
+        user_store.set_email(user_id, body.email)
+        changed.append(f"email={body.email}")
+    if body.note is not None:
+        user_store.set_note(user_id, body.note)
+        changed.append("note")
+    if body.is_admin is not None:
+        user_store.set_admin(user_id, body.is_admin)
+        changed.append(f"is_admin={body.is_admin}")
+    if changed:
+        user_store.log_admin_action(admin_id, "update_profile", user_id,
+                                    "; ".join(changed))
+    return user_store.get_or_create_user(user_id)
+
+
+@app.post("/admin/users/{user_id}/reset-usage")
+def admin_reset_usage(user_id: str, admin_id: str = Depends(require_admin)):
+    """Zero today's Copilot usage for a user (fresh quota for the day)."""
+    user_store.reset_daily_usage(user_id)
+    user_store.log_admin_action(admin_id, "reset_usage", user_id)
+    return {"user_id": user_id, "copilot_calls_today": 0}
+
+
+@app.delete("/admin/users/{user_id}", status_code=204)
+def admin_delete_user(user_id: str, admin_id: str = Depends(require_admin)):
+    """Hard-delete a user and their usage/watchlist rows. Irreversible."""
+    if user_id == admin_id:
+        raise HTTPException(status_code=422, detail="Cannot delete your own admin account.")
+    user_store.delete_user(user_id)
+    user_store.log_admin_action(admin_id, "delete_user", user_id)
+    return JSONResponse(status_code=204, content=None)
+
+
+@app.get("/admin/audit")
+def admin_audit(limit: int = 100, admin_id: str = Depends(require_admin)):
+    return {"events": user_store.admin_audit_log(limit)}

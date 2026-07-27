@@ -66,12 +66,30 @@ def init_db() -> None:
     else:
         spend_ddl = spend_ddl.replace(
             "INTEGER PRIMARY KEY", "BIGSERIAL PRIMARY KEY")
+    admin_audit_ddl = """
+        CREATE TABLE IF NOT EXISTS admin_audit (
+            id          INTEGER PRIMARY KEY,
+            admin_id    TEXT NOT NULL,
+            action      TEXT NOT NULL,
+            target_user TEXT,
+            detail      TEXT,
+            created_at  DOUBLE PRECISION NOT NULL
+        )
+    """
+    if not USE_PG:
+        admin_audit_ddl = (admin_audit_ddl
+                           .replace("DOUBLE PRECISION", "REAL")
+                           .replace("INTEGER PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT"))
+    else:
+        admin_audit_ddl = admin_audit_ddl.replace(
+            "INTEGER PRIMARY KEY", "BIGSERIAL PRIMARY KEY")
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(users_ddl)
         cur.execute(usage_ddl)
         cur.execute(watchlist_ddl)
         cur.execute(spend_ddl)
+        cur.execute(admin_audit_ddl)
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_stripe_customer "
             "ON users(stripe_customer_id)"
@@ -79,6 +97,36 @@ def init_db() -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_spend_log_day ON spend_log(day)"
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_audit_time ON admin_audit(created_at)"
+        )
+        # Idempotent column migrations for existing deployments (users table grew
+        # admin/entitlement columns after first launch). ADD COLUMN IF NOT EXISTS
+        # works on both Postgres and SQLite >= 3.35 via the same guard below.
+        for col, ddl in (
+            ("is_admin", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("bonus_credits", "INTEGER NOT NULL DEFAULT 0"),
+            ("email", "TEXT"),
+            ("note", "TEXT"),
+        ):
+            _add_column_if_missing(cur, "users", col, ddl)
+
+
+def _add_column_if_missing(cur, table: str, column: str, ddl: str) -> None:
+    """ALTER TABLE ADD COLUMN only when the column isn't there yet (idempotent)."""
+    if USE_PG:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = %s AND column_name = %s",
+            (table, column),
+        )
+        if cur.fetchone() is None:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    else:
+        cur.execute(f"PRAGMA table_info({table})")
+        cols = {r[1] for r in cur.fetchall()}
+        if column not in cols:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 def _utc_day() -> str:
@@ -92,7 +140,8 @@ def get_or_create_user(user_id: str) -> dict:
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            _q("SELECT user_id, tier, stripe_customer_id, stripe_subscription_id "
+            _q("SELECT user_id, tier, stripe_customer_id, stripe_subscription_id, "
+               "is_admin, bonus_credits, email, note "
                "FROM users WHERE user_id = ?"),
             (user_id,),
         )
@@ -105,9 +154,12 @@ def get_or_create_user(user_id: str) -> dict:
                 (user_id, FREE, now, now),
             )
             return {"user_id": user_id, "tier": FREE,
-                    "stripe_customer_id": None, "stripe_subscription_id": None}
+                    "stripe_customer_id": None, "stripe_subscription_id": None,
+                    "is_admin": False, "bonus_credits": 0, "email": None, "note": None}
         return {"user_id": row[0], "tier": row[1],
-                "stripe_customer_id": row[2], "stripe_subscription_id": row[3]}
+                "stripe_customer_id": row[2], "stripe_subscription_id": row[3],
+                "is_admin": bool(row[4]), "bonus_credits": int(row[5] or 0),
+                "email": row[6], "note": row[7]}
 
 
 def get_tier(user_id: str) -> str:
@@ -252,8 +304,6 @@ def set_watchlist(user_id: str, symbols: list[str]) -> list[str]:
             (user_id, json.dumps(seen), time.time()),
         )
     return seen
-
-
 # --- persistent spend log (survives restarts; powers the weekly digest) -------
 
 def record_spend(user_id: str | None, endpoint: str, usd: float) -> None:
@@ -282,3 +332,158 @@ def spend_by_day(days: int = 7) -> list[dict]:
         ]
     rows.reverse()
     return rows
+
+
+# --- admin --------------------------------------------------------------------
+
+def effective_copilot_quota(user_id: str, base_quota: int) -> int:
+    """The user's real daily Copilot quota = tier base + admin-granted bonus credits.
+
+    A base_quota of -1 means unlimited (Premium) and stays unlimited regardless
+    of bonus credits. Bonus credits are the "fund a user" lever — they extend a
+    capped plan without changing the underlying tier.
+    """
+    if base_quota < 0:
+        return base_quota
+    bonus = int(get_or_create_user(user_id).get("bonus_credits") or 0)
+    return base_quota + max(bonus, 0)
+
+
+def is_admin(user_id: str) -> bool:
+    """True if the user has the admin flag. Env ADMIN_USER_IDS is checked at the
+    endpoint layer (so a bootstrap admin can exist before any DB row does)."""
+    if not user_id:
+        return False
+    try:
+        return bool(get_or_create_user(user_id).get("is_admin"))
+    except Exception:  # noqa: BLE001 — never let admin check break the request
+        return False
+
+
+def set_admin(user_id: str, is_admin_flag: bool) -> None:
+    get_or_create_user(user_id)
+    with _conn() as conn:
+        conn.cursor().execute(
+            _q("UPDATE users SET is_admin = ?, updated_at = ? WHERE user_id = ?"),
+            (bool(is_admin_flag), time.time(), user_id),
+        )
+
+
+def set_email(user_id: str, email: str | None) -> None:
+    get_or_create_user(user_id)
+    with _conn() as conn:
+        conn.cursor().execute(
+            _q("UPDATE users SET email = ?, updated_at = ? WHERE user_id = ?"),
+            ((email or "").strip() or None, time.time(), user_id),
+        )
+
+
+def set_note(user_id: str, note: str | None) -> None:
+    get_or_create_user(user_id)
+    with _conn() as conn:
+        conn.cursor().execute(
+            _q("UPDATE users SET note = ?, updated_at = ? WHERE user_id = ?"),
+            ((note or "").strip() or None, time.time(), user_id),
+        )
+
+
+def add_credits(user_id: str, delta: int) -> int:
+    """Add (or subtract, if negative) bonus Copilot credits. Returns new balance.
+
+    Clamped at >= 0 so an admin can't drive a user into negative credits.
+    """
+    get_or_create_user(user_id)
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            _q("SELECT bonus_credits FROM users WHERE user_id = ?"), (user_id,)
+        )
+        cur_bal = int((cur.fetchone() or [0])[0] or 0)
+        new_bal = max(cur_bal + int(delta), 0)
+        cur.execute(
+            _q("UPDATE users SET bonus_credits = ?, updated_at = ? WHERE user_id = ?"),
+            (new_bal, time.time(), user_id),
+        )
+        return new_bal
+
+
+def reset_daily_usage(user_id: str) -> None:
+    """Zero today's Copilot counter for the user (admin 'give them a fresh day')."""
+    day = _utc_day()
+    with _conn() as conn:
+        conn.cursor().execute(
+            _q("DELETE FROM usage_daily WHERE user_id = ? AND day = ?"),
+            (user_id, day),
+        )
+
+
+def list_users(search: str | None = None, limit: int = 200, offset: int = 0) -> list[dict]:
+    """All users, newest first, optionally filtered by user_id/email substring."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        sql = ("SELECT user_id, tier, is_admin, bonus_credits, email, note, "
+               "stripe_customer_id, created_at, updated_at FROM users")
+        args: list = []
+        if search:
+            sql += " WHERE user_id LIKE ? OR email LIKE ?"
+            like = f"%{search.strip()}%"
+            args += [like, like]
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        args += [int(limit), int(offset)]
+        cur.execute(_q(sql), args)
+        out = []
+        for r in cur.fetchall():
+            out.append({
+                "user_id": r[0], "tier": r[1], "is_admin": bool(r[2]),
+                "bonus_credits": int(r[3] or 0), "email": r[4], "note": r[5],
+                "has_stripe": bool(r[6]),
+                "created_at": r[7], "updated_at": r[8],
+            })
+        return out
+
+
+def count_users() -> dict:
+    """Aggregate counts for the admin dashboard header."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        total = int(cur.fetchone()[0])
+        cur.execute(_q("SELECT tier, COUNT(*) FROM users GROUP BY tier"))
+        by_tier = {r[0]: int(r[1]) for r in cur.fetchall()}
+        cur.execute(_q("SELECT COUNT(*) FROM users WHERE is_admin = ?"), (True,))
+        admins = int(cur.fetchone()[0])
+        cur.execute(
+            _q("SELECT COUNT(*) FROM users WHERE stripe_customer_id IS NOT NULL"))
+        paying = int(cur.fetchone()[0])
+    return {"total": total, "by_tier": by_tier, "admins": admins, "paying": paying}
+
+
+def delete_user(user_id: str) -> None:
+    """Remove a user and their dependent rows (usage, watchlist). Hard delete."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        for table in ("users", "usage_daily", "watchlists"):
+            cur.execute(_q(f"DELETE FROM {table} WHERE user_id = ?"), (user_id,))
+
+
+def log_admin_action(admin_id: str, action: str, target_user: str | None = None,
+                     detail: str | None = None) -> None:
+    """Audit trail — every admin mutation is recorded with who/what/whom/when."""
+    with _conn() as conn:
+        conn.cursor().execute(
+            _q("INSERT INTO admin_audit (admin_id, action, target_user, detail, created_at) "
+               "VALUES (?, ?, ?, ?, ?)"),
+            (admin_id, action, target_user, detail, time.time()),
+        )
+
+
+def admin_audit_log(limit: int = 100) -> list[dict]:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            _q("SELECT admin_id, action, target_user, detail, created_at "
+               "FROM admin_audit ORDER BY created_at DESC LIMIT ?"),
+            (int(limit),),
+        )
+        return [{"admin_id": r[0], "action": r[1], "target_user": r[2],
+                 "detail": r[3], "created_at": r[4]} for r in cur.fetchall()]

@@ -24,6 +24,7 @@
 | Per-user saved watchlists | ✅ live |
 | Weekly LLM cost digest (Telegram) | ✅ live |
 | Kronos range service (separate Railway service, torch) | ✅ deployed |
+| Admin panel (user mgmt: tier upgrade, fund credits, reset usage, audit log) | ✅ live (admin-only) |
 | Clerk auth + Stripe billing + tier quotas | ✅ auth live; Stripe test mode |
 | Monorepo scaffold | ✅ |
 

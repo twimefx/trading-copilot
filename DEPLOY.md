@@ -57,6 +57,7 @@ Then set environment variables in the Railway dashboard (Variables tab):
 | `OANDA_ENV` | `live` |
 | `DATABASE_URL` | auto-injected by Railway when you add a Postgres database (see Trade Journal below) |
 | `FRONTEND_ORIGIN` | your Vercel URL (after step 2), e.g. `https://trading-copilot.vercel.app` |
+| `ADMIN_USER_IDS` | comma-separated Clerk user ids that are admins (bootstrap admin before any DB flag). Optional — you can also grant admin per-user via the Admin panel |
 
 Railway gives you a public backend URL like `https://xxx.up.railway.app`.
 If you don't see a domain: **Settings → Networking → Generate Domain**. Copy it.

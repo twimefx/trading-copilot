@@ -29,11 +29,36 @@ export type Range = { low: number | null; high: number | null; source: string | 
 export type MeResponse = {
   user_id: string;
   tier: "free" | "pro" | "premium";
+  is_admin?: boolean;
+  bonus_credits?: number;
   daily_copilot_quota: number;
   copilot_calls_today: number;
   copilot_calls_remaining: number | null;
   scan_max_symbols: number;
   features: string[];
+};
+
+export type AdminUser = {
+  user_id: string;
+  tier: string;
+  is_admin: boolean;
+  bonus_credits: number;
+  email: string | null;
+  note: string | null;
+  has_stripe: boolean;
+  created_at: number;
+  updated_at: number;
+  copilot_calls_today?: number;
+  daily_copilot_quota?: number;
+};
+
+export type AdminStats = {
+  total: number;
+  by_tier: Record<string, number>;
+  admins: number;
+  paying: number;
+  spend_today_usd: number;
+  spend_cap_usd: number;
 };
 
 export class ApiError extends Error {
@@ -146,6 +171,27 @@ export function useApi() {
         request<{ signals: any[] }>(
           `/signals/history${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ""}`,
         ).then((r) => r.signals ?? []),
+      // Admin
+      adminStats: () => request<AdminStats>("/admin/stats"),
+      adminUsers: (search?: string) =>
+        request<{ users: AdminUser[] }>(
+          `/admin/users${search ? `?search=${encodeURIComponent(search)}` : ""}`,
+        ).then((r) => r.users ?? []),
+      adminGetUser: (id: string) => request<AdminUser>(`/admin/users/${encodeURIComponent(id)}`),
+      adminCreateUser: (payload: { user_id: string; email?: string; tier?: string }) =>
+        request<AdminUser>("/admin/users", { method: "POST", body: JSON.stringify(payload) }),
+      adminSetTier: (id: string, tier: string) =>
+        request(`/admin/users/${encodeURIComponent(id)}/tier`, { method: "POST", body: JSON.stringify({ tier }) }),
+      adminFundCredits: (id: string, delta: number) =>
+        request(`/admin/users/${encodeURIComponent(id)}/credits`, { method: "POST", body: JSON.stringify({ delta }) }),
+      adminUpdateProfile: (id: string, fields: { email?: string; note?: string; is_admin?: boolean }) =>
+        request<AdminUser>(`/admin/users/${encodeURIComponent(id)}/profile`, { method: "POST", body: JSON.stringify(fields) }),
+      adminResetUsage: (id: string) =>
+        request(`/admin/users/${encodeURIComponent(id)}/reset-usage`, { method: "POST", body: "{}" }),
+      adminDeleteUser: (id: string) =>
+        request(`/admin/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      adminAudit: () =>
+        request<{ events: any[] }>("/admin/audit").then((r) => r.events ?? []),
       request,
     }),
     [request, isSignedIn],
