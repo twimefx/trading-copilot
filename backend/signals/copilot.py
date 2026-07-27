@@ -12,6 +12,7 @@ import json
 import re
 
 from backend.ai.router import AIRouter, TaskClass
+from backend.signals import history as signal_history
 from backend.signals.context import MarketContext, build_market_context
 
 DISCLAIMER = (
@@ -141,10 +142,14 @@ def _compute_range(ctx: MarketContext) -> dict:
 def analyze(ctx: MarketContext, router: AIRouter | None = None) -> dict:
     """Run the Copilot analysis on a MarketContext. Returns structured dict + disclaimer."""
     router = router or AIRouter()
+    # Reflection loop: inject our own recent, honestly-scored track record on this
+    # symbol so the model reasons with its history instead of in a vacuum.
+    reflection = signal_history.reflection(ctx.symbol)
     prompt = (
         f"Analyze {ctx.symbol} ({ctx.interval}). Here is the live MarketContext:\n\n"
         f"{ctx.to_prompt_json()}\n\n"
-        "Synthesize a transparent directional call per your rules. Respond with JSON only."
+        + (f"{reflection}\n\n" if reflection else "")
+        + "Synthesize a transparent directional call per your rules. Respond with JSON only."
     )
     raw = router.complete(TaskClass.MARKET_COPILOT, prompt, system=SYSTEM_PROMPT, max_tokens=1200)
 
@@ -164,6 +169,9 @@ def analyze(ctx: MarketContext, router: AIRouter | None = None) -> dict:
 
     result["disclaimer"] = DISCLAIMER
     result["cost_usd"] = round(router.cost_log.total_usd, 5)
+    # Surface the reflection block that informed this call (None when no record yet)
+    # so the UI can show the call was made with our track record in view.
+    result["track_record"] = reflection
     # Reference price at call time — powers the track record's honest scoring.
     last_close = ctx.indicators.get("last_close")
     if isinstance(last_close, (int, float)):

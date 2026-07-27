@@ -188,3 +188,61 @@ def stats() -> dict:
         "note": ("Accuracy counts directional (bullish/bearish) signals only, scored "
                  f"{DEFAULT_HORIZON_PERIODS} periods after the call. Not financial advice."),
     }
+
+
+# --- reflection loop -----------------------------------------------------------
+
+# How many of the most recent SCORED directional calls to narrate in the block.
+_REFLECTION_LOOKBACK = 10
+_REFLECTION_RECENT_N = 3
+
+
+def reflection(symbol: str) -> str | None:
+    """A short, deterministic 'recent track record on this symbol' text block.
+
+    Built straight from scored signal_history rows (NO LLM) so it stays honest and
+    free, and injected into the copilot/debate prompt so the model reasons with its
+    own recent history on this asset instead of in a vacuum. Returns None when there
+    is no scored directional record yet (so the caller adds nothing — no noise).
+
+    Neutral/flat calls are logged but excluded from accuracy (same rule as stats()).
+    """
+    sym = symbol.upper()
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            _q("SELECT lean, conviction, outcome FROM signal_history "
+               "WHERE symbol = ? AND outcome IN ('correct', 'incorrect') "
+               "ORDER BY created_at DESC LIMIT ?"),
+            (sym, int(_REFLECTION_LOOKBACK)),
+        )
+        rows = cur.fetchall()
+    if not rows:
+        return None
+
+    correct = sum(1 for _, _, o in rows if o == "correct")
+    scored = len(rows)
+    acc = round(100.0 * correct / scored)
+
+    # Narrate the most recent few calls so the model sees the *sequence*, not just a %.
+    recent = []
+    for lean, conv, outcome in rows[:_REFLECTION_RECENT_N]:
+        conv_txt = f" {conv}%" if isinstance(conv, int) else ""
+        recent.append(f"{lean}{conv_txt} -> {outcome}")
+    recent_txt = "; ".join(recent)
+
+    # Honest framing: a strong recent record is context, a weak one is a caution.
+    if acc >= 60:
+        framing = "recent calls here have been mostly right"
+    elif acc <= 40:
+        framing = "recent calls here have been mostly WRONG — weigh this carefully"
+    else:
+        framing = "recent calls here have been mixed"
+
+    return (
+        f"Track record for {sym} (last {scored} scored directional calls): "
+        f"{correct}/{scored} correct ({acc}%) — {framing}. "
+        f"Most recent: {recent_txt}. "
+        "Use this as context on your own recent reliability for this asset, not as a "
+        "direction signal."
+    )

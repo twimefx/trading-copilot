@@ -18,6 +18,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from backend.ai.router import AIRouter, TaskClass
+from backend.signals import history as signal_history
 from backend.signals.context import MarketContext
 
 # --- agent definitions -------------------------------------------------------
@@ -157,10 +158,14 @@ def _parse_card(raw: str, agent_key: str, agent_name: str) -> dict:
 
 
 def _agent_prompt(ctx: MarketContext) -> str:
+    # Reflection loop: every specialist sees our recent scored track record on this
+    # symbol (deterministic, no extra LLM cost), so the panel debates with history.
+    reflection = signal_history.reflection(ctx.symbol)
     return (
         f"Analyze {ctx.symbol} ({ctx.interval}) from your lens only.\n\n"
         f"MarketContext:\n{ctx.to_prompt_json()}\n\n"
-        f"{_OUTPUT_CONTRACT}"
+        + (f"{reflection}\n\n" if reflection else "")
+        + f"{_OUTPUT_CONTRACT}"
     )
 
 

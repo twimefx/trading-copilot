@@ -30,6 +30,7 @@ type Analysis = {
   suggested_invalidation?: string;
   disclaimer?: string;
   cost_usd?: number;
+  track_record?: string | null;
   raw?: string;
 };
 
@@ -454,6 +455,13 @@ export default function Home() {
               />
             </div>
             <p className="mt-4 text-sm leading-relaxed text-gray-200">{result.summary}</p>
+
+            {/* Reflection loop — this call was made with our scored track record in view */}
+            {result.track_record && (
+              <p className="mt-3 text-[12px] leading-relaxed text-neutral border-l-2 border-accent/40 pl-3">
+                {result.track_record}
+              </p>
+            )}
 
             {/* Data coverage — transparent about what fed the call */}
             <div className="mt-4 flex flex-wrap gap-2 pt-3 border-t border-white/10">

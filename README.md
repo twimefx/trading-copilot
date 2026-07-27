@@ -21,6 +21,7 @@
 | Forex (Oanda): Copilot/Debate/Strategy parity + retail position-book flow | ✅ live |
 | Alerts (price + scanner-lean rules → Telegram/email, 15-min scheduler) | ✅ live |
 | Signal track record (every Copilot call logged + honestly scored 24 periods later) | ✅ live |
+| Reflection loop (scored track record fed back into Copilot/Debate prompts) | ✅ live |
 | Per-user saved watchlists | ✅ live |
 | Weekly LLM cost digest (Telegram) | ✅ live |
 | Kronos range service (separate Railway service, torch) | ✅ deployed |
