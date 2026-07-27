@@ -48,7 +48,7 @@ from backend.signals import history as signal_history
 
 logger = logging.getLogger("copilot.api")
 
-app = FastAPI(title="AI Trading Copilot", version="0.3.0")
+app = FastAPI(title="AI Trading Copilot", version="0.4.0")
 
 # Initialize DBs once at import (idempotent — safe on every worker boot).
 journal_store.init_db()
@@ -131,7 +131,7 @@ def health():
     return {
         "status": "ok",
         "service": "trading-copilot",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "spend_today_usd": spend_guard.spent_today,
         "spend_cap_usd": spend_guard.cap,
     }
