@@ -11,6 +11,7 @@ import Flow from "@/components/Flow";
 import Strategy from "@/components/Strategy";
 import Alerts from "@/components/Alerts";
 import TrackRecord from "@/components/TrackRecord";
+import Replay from "@/components/Replay";
 import { useApi, MeResponse } from "@/lib/api";
 
 // When Clerk isn't configured the app runs anonymously (no sign-in UI, no tier
@@ -73,7 +74,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [upgradePrompt, setUpgradePrompt] = useState(false);
   const [result, setResult] = useState<Analysis | null>(null);
-  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate" | "flow" | "strategy" | "alerts" | "track">("copilot");
+  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate" | "flow" | "strategy" | "alerts" | "track" | "replay">("copilot");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [journalRefresh, setJournalRefresh] = useState(0);
   const [me, setMe] = useState<MeResponse | null>(null);
@@ -235,7 +236,7 @@ export default function Home() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-white/10">
-        {(["copilot", "scanner", "journal", "portfolio", "debate", "flow", "strategy", "alerts", "track"] as const).map((t) => (
+        {(["copilot", "scanner", "journal", "portfolio", "debate", "flow", "strategy", "alerts", "track", "replay"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setView(t)}
@@ -243,7 +244,7 @@ export default function Home() {
               view === t ? "border-accent text-white" : "border-transparent text-neutral hover:text-white"
             }`}
           >
-            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : t === "portfolio" ? "Portfolio" : t === "debate" ? "Debate" : t === "flow" ? "Flow" : t === "strategy" ? "Strategy" : t === "alerts" ? "Alerts" : "Track Record"}
+            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : t === "portfolio" ? "Portfolio" : t === "debate" ? "Debate" : t === "flow" ? "Flow" : t === "strategy" ? "Strategy" : t === "alerts" ? "Alerts" : t === "replay" ? "Replay" : "Track Record"}
           </button>
         ))}
       </div>
@@ -261,6 +262,8 @@ export default function Home() {
       {view === "alerts" && <Alerts api={api} watchlist={watchlist} />}
 
       {view === "track" && <TrackRecord api={api} />}
+
+      {view === "replay" && <Replay api={api} symbol={symbol} interval={interval} />}
 
       {view === "scanner" && (
         <Scanner

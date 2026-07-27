@@ -97,6 +97,8 @@ export function useApi() {
         request(`/flow?symbol=${encodeURIComponent(symbol)}&period=${encodeURIComponent(period)}`),
       strategy: (body: { prompt: string; symbol: string; interval: string }) =>
         request("/strategy", { method: "POST", body: JSON.stringify(body) }),
+      replay: (body: { symbol: string; interval: string; as_of: number; mode?: string; include_kronos?: boolean }) =>
+        request("/replay", { method: "POST", body: JSON.stringify(body) }),
       // Billing
       startCheckout: async (tier: "pro" | "premium") => {
         const { url } = await request<{ url: string }>("/billing/checkout", {
