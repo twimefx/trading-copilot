@@ -15,8 +15,17 @@ import sys
 import numpy as np
 import pandas as pd
 
-_VENDOR = os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "Kronos")
-sys.path.insert(0, _VENDOR)
+# Vendored Kronos model code. Resolve robustly: prefer the image's /app/vendor
+# path (GPU container), fall back to the repo-relative path (local dev/CPU svc).
+_CANDIDATES = [
+    os.environ.get("KRONOS_VENDOR_DIR"),
+    "/app/vendor/Kronos",
+    os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "Kronos"),
+]
+for _c in _CANDIDATES:
+    if _c and os.path.isdir(_c) and _c not in sys.path:
+        sys.path.insert(0, _c)
+        break
 
 _predictor = None  # cached singleton
 

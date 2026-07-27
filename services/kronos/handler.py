@@ -23,14 +23,24 @@ import os
 import sys
 
 # Make the vendored Kronos model importable before kronos_range imports it.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "Kronos"))
+# Prefer the image's /app/vendor path; fall back to repo-relative for local dev.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _c in ("/app/vendor/Kronos",
+           os.path.join(_HERE, "..", "..", "vendor", "Kronos")):
+    if os.path.isdir(_c) and _c not in sys.path:
+        sys.path.insert(0, _c)
+        break
 
 import pandas as pd  # noqa: E402
 import runpod  # noqa: E402
 
 from backend.signals.kronos_range import forecast_range  # noqa: E402
 
-# Warm the model singleton at worker init so the first request isn't a cold load.
+# Warm the model singleton in a background thread so the worker reports READY
+# immediately (RunPod marks slow-init workers unhealthy). First request may block
+# briefly on the lock while the model finishes loading on CUDA.
+import threading  # noqa: E402
+
 _WARM = os.environ.get("KRONOS_WARM", "1") == "1"
 
 
@@ -38,9 +48,10 @@ def _warm():
     try:
         from backend.signals.kronos_range import _get_predictor
         _get_predictor()
+        print("[kronos] model warm", flush=True)
     except Exception as e:  # noqa: BLE001
         # Don't crash the worker on warm failure; the request path reports errors.
-        print(f"[kronos] warm load failed: {e}", file=sys.stderr)
+        print(f"[kronos] warm load failed: {e}", file=sys.stderr, flush=True)
 
 
 def handler(event):
@@ -67,6 +78,6 @@ def handler(event):
 
 
 if _WARM:
-    _warm()
+    threading.Thread(target=_warm, daemon=True).start()
 
 runpod.serverless.start({"handler": handler})
