@@ -31,6 +31,8 @@ COPY backend/data backend/data
 COPY services/kronos/handler.py services/kronos/handler.py
 
 ENV PYTHONUNBUFFERED=1
+# Make `import backend...` work no matter how the worker invokes Python.
+ENV PYTHONPATH=/app
 # Run on the GPU; weights pre-downloaded at build so cold starts are fast.
 ENV KRONOS_DEVICE=cuda
 RUN python -c "import sys; sys.path.insert(0,'vendor/Kronos'); \

@@ -22,9 +22,18 @@ from __future__ import annotations
 import os
 import sys
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# The `backend` package lives at the app/repo root. Running this file directly
+# (python services/kronos/handler.py) only puts the handler's own dir on sys.path,
+# so add the app root explicitly — otherwise `import backend...` fails at startup.
+for _root in ("/app", os.path.join(_HERE, "..", "..")):
+    if os.path.isdir(os.path.join(_root, "backend")) and _root not in sys.path:
+        sys.path.insert(0, _root)
+        break
+
 # Make the vendored Kronos model importable before kronos_range imports it.
 # Prefer the image's /app/vendor path; fall back to repo-relative for local dev.
-_HERE = os.path.dirname(os.path.abspath(__file__))
 for _c in ("/app/vendor/Kronos",
            os.path.join(_HERE, "..", "..", "vendor", "Kronos")):
     if os.path.isdir(_c) and _c not in sys.path:
