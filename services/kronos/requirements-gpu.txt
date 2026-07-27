@@ -1,12 +1,13 @@
 # Kronos GPU service deps. torch is intentionally OMITTED — the CUDA base image
 # (runpod/pytorch) ships a torch wheel matched to its CUDA runtime. Installing a
 # second torch here would bloat the image and can break CUDA compatibility.
-fastapi~=0.138.0
-uvicorn[standard]~=0.49.0
+# Base image is Python 3.11, so pins must be resolvable on 3.11 (numpy<2.5).
+fastapi~=0.115.0
+uvicorn[standard]~=0.30.0
 pandas~=2.2.2
-numpy~=2.5.0
-pydantic~=2.13.4
-safetensors~=0.6.2
-huggingface-hub~=0.33.1
-einops~=0.8.2
+numpy~=2.1.0
+pydantic~=2.9.0
+safetensors~=0.4.5
+huggingface-hub~=0.24.0
+einops~=0.8.0
 runpod~=1.7.0
