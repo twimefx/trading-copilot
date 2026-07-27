@@ -42,16 +42,27 @@ from backend.signals.kronos_range import forecast_range  # noqa: E402
 import threading  # noqa: E402
 
 _WARM = os.environ.get("KRONOS_WARM", "1") == "1"
+_MODEL_LOCK = threading.Lock()
+
+
+def _ensure_model():
+    """Build the predictor exactly once, thread-safe. Logs each phase so worker
+    logs show precisely where a cold start fails (import vs weights vs cuda)."""
+    from backend.signals import kronos_range
+    with _MODEL_LOCK:
+        if kronos_range._predictor is None:
+            print("[kronos] loading tokenizer+model...", flush=True)
+            kronos_range._get_predictor()
+            print(f"[kronos] model ready on {os.environ.get('KRONOS_DEVICE','cpu')}", flush=True)
+    return kronos_range._predictor
 
 
 def _warm():
     try:
-        from backend.signals.kronos_range import _get_predictor
-        _get_predictor()
-        print("[kronos] model warm", flush=True)
+        _ensure_model()
     except Exception as e:  # noqa: BLE001
         # Don't crash the worker on warm failure; the request path reports errors.
-        print(f"[kronos] warm load failed: {e}", file=sys.stderr, flush=True)
+        print(f"[kronos] warm load failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
 def handler(event):
@@ -64,7 +75,10 @@ def handler(event):
         pred_len = int(inp.get("pred_len", 24))
         sample_count = int(inp.get("sample_count", 5))
 
+        _ensure_model()  # thread-safe; no race with the warm thread
+        print(f"[kronos] forecasting pred_len={pred_len} samples={sample_count} rows={len(df)}", flush=True)
         raw = forecast_range(df, pred_len=pred_len, sample_count=sample_count)
+        print("[kronos] forecast done", flush=True)
         return {
             "low": raw["expected_band_low"],
             "high": raw["expected_band_high"],
@@ -74,6 +88,8 @@ def handler(event):
             "device": os.environ.get("KRONOS_DEVICE", "cpu"),
         }
     except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
         return {"error": f"{type(e).__name__}: {str(e)[:200]}"}
 
 
