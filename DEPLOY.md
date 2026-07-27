@@ -251,3 +251,6 @@ curl -s -X POST <backend-url>/journal -H 'Content-Type: application/json' \
 - **Cost:** Anthropic usage is the main variable cost (~$0.06/Copilot analysis with Opus).
   The backend already has a TTL cache, per-IP rate limit, and a daily spend cap
   (env-overridable: `COPILOT_CACHE_TTL`, `COPILOT_RATE_PER_HOUR`, `DAILY_SPEND_CAP_USD`).
+- **Market Replay:** `POST /replay` (Premium) runs the Copilot/Debate against a context
+  truncated at a historical `as_of` (last 90 days) and scores the next 24 periods
+  deterministically. Cache: `REPLAY_CACHE_TTL` (default 3600s — history doesn't change).
