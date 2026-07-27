@@ -4,6 +4,9 @@
 # a GPU torch wheel and a RunPod serverless handler. Build context = repo root:
 #   docker build -f services/kronos/Dockerfile.gpu .
 # RunPod's hosted builder does this from the GitHub repo (no local daemon needed).
+# runpod/pytorch ships torch matched to its CUDA runtime. (devel tag verified to
+# exist on Docker Hub; the older '-runtime' tag scheme was retired.) The workflow
+# frees runner disk before building so the large image fits.
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 WORKDIR /app

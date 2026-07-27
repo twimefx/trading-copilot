@@ -19,6 +19,14 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
+      - name: Free disk space
+        # CUDA base images are huge; the default runner's ~14GB fills with
+        # preinstalled SDKs we don't need. Reclaim them before building.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/powershell /usr/share/swift \
+                      /usr/local/.ghcup /opt/hostedtoolcache || true
+          df -h /
       - name: Checkout
         uses: actions/checkout@v4
 
