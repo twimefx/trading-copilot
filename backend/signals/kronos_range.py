@@ -70,7 +70,7 @@ def forecast_range(
     # Timestamps may arrive as JSON strings (from the HTTP service / RunPod
     # handler). Coerce to real datetimes up front — the Kronos predictor uses .dt
     # accessors on the timestamp series, which fail on object/string dtype.
-    df["timestamps"] = pd.to_datetime(df["timestamps"])
+    df["timestamps"] = pd.to_datetime(df["timestamps"], utc=True).dt.tz_localize(None)
     lookback = min(lookback, len(df) - 1)
     cols = ["open", "high", "low", "close", "volume", "amount"]
 

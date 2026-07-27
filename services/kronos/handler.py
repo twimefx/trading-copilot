@@ -81,6 +81,10 @@ def handler(event):
         if not ohlcv:
             return {"error": "missing 'ohlcv' in input"}
         df = pd.DataFrame(ohlcv)
+        # Parse timestamps on ingest so the model always gets datetimelike values
+        # (UTC-normalized); a bad value surfaces here as a clear error, not a
+        # cryptic .dt failure deep inside the model.
+        df["timestamps"] = pd.to_datetime(df["timestamps"], utc=True).dt.tz_localize(None)
         pred_len = int(inp.get("pred_len", 24))
         sample_count = int(inp.get("sample_count", 5))
 
