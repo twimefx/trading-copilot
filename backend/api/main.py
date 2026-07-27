@@ -45,6 +45,7 @@ from backend.billing import users as user_store
 from backend.journal import store as journal_store
 from backend import alerts as alert_store
 from backend.signals import history as signal_history
+from backend.signals import regime as regime_gate
 
 logger = logging.getLogger("copilot.api")
 
@@ -127,6 +128,7 @@ class DebateRequest(BaseModel):
     symbol: str = "BTCUSDT"
     interval: str = "1h"
     include_kronos: bool = True
+    researchers: bool = True  # bull/bear advocate + risk verdict stage (no extra LLM cost)
 
 
 class StrategyRequest(BaseModel):
@@ -283,11 +285,13 @@ def scan(req: ScanRequest, user_id: str = Depends(current_user_id)):
     key = f"{','.join(sorted(symbols))}:{req.interval}"
     cached = scan_cache.get(key)
     if cached is not None:
-        return {"results": cached, "cached": True, "scan_max_symbols": tier.scan_max_symbols}
+        return {"results": cached, "cached": True, "scan_max_symbols": tier.scan_max_symbols,
+                "regime": regime_gate.evaluate_from_cards(cached)}
     from backend.signals.scanner import scan_watchlist
     results = scan_watchlist(symbols, req.interval)
     scan_cache.set(key, results)
-    return {"results": results, "cached": False, "scan_max_symbols": tier.scan_max_symbols}
+    return {"results": results, "cached": False, "scan_max_symbols": tier.scan_max_symbols,
+            "regime": regime_gate.evaluate_from_cards(results)}
 
 
 # --- Billing -----------------------------------------------------------------
@@ -543,7 +547,7 @@ def debate(req: DebateRequest, request: Request,
         )
 
     sym = req.symbol.upper()
-    cache_key = f"debate:{sym}:{req.interval}:{int(req.include_kronos)}"
+    cache_key = f"debate:{sym}:{req.interval}:{int(req.include_kronos)}:{int(req.researchers)}"
     cached = debate_cache.get(cache_key)
     if cached is not None:
         return {**cached, "cached": True}
@@ -564,7 +568,8 @@ def debate(req: DebateRequest, request: Request,
     from backend.signals.debate import debate as run_debate
     from backend.data.errors import UnknownSymbolError
     try:
-        result = run_debate(sym, req.interval, include_kronos=req.include_kronos)
+        result = run_debate(sym, req.interval, include_kronos=req.include_kronos,
+                            researchers=req.researchers)
     except UnknownSymbolError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     except RuntimeError as e:
@@ -976,6 +981,77 @@ def cost_digest(body: CostDigestRequest):
     if email and alert_store._notify_email(email, "Trading Copilot weekly cost digest", message):
         delivered.append("email")
     return {"days": days, "total_usd": total, "delivered": delivered}
+
+
+# --- Daily market brief (scheduler) ----------------------------------------------
+
+# Universe screened for the brief: crypto leaders + the forex majors/gold so the
+# regime read spans both asset classes the Copilot covers.
+BRIEF_UNIVERSE = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+    "EUR_USD", "GBP_USD", "USD_JPY", "XAU_USD",
+]
+
+_REGIME_LABELS = {
+    "FULL_RISK_ALLOWED": "full risk allowed",
+    "SELECTIVE_ONLY": "selective only",
+    "CASH_PRIORITY": "cash priority",
+    "RESEARCH_ONLY": "research only",
+}
+
+
+class BriefRequest(BaseModel):
+    scheduler_key: str | None = None
+    interval: str = "1h"
+
+
+def _compose_brief(regime: dict, cards: list[dict], interval: str) -> tuple[str, list[dict]]:
+    """Deterministic brief text + movers list. No LLM — the regime gate, the top
+    conviction cards, and each card's own rule-based reasons are the content.
+    Returns (message, movers)."""
+    movers = [c for c in cards if c.get("ok") and c.get("lean") != "neutral"][:5]
+    state = regime.get("state", "RESEARCH_ONLY")
+    label = _REGIME_LABELS.get(state, state.lower().replace("_", " "))
+
+    lines = [f"Market brief — regime: {label}."]
+    if regime.get("breadth_pct") is not None:
+        lines.append(f"Breadth {regime['breadth_pct']}% across "
+                     f"{regime.get('symbols_evaluated', 0)} symbols ({interval}).")
+    for reason in (regime.get("reasons") or [])[:3]:
+        lines.append(f"  - {reason}")
+    if movers:
+        lines.append("Top movers by conviction:")
+        for c in movers:
+            why = (c.get("reasons") or ["technical setup"])[0]
+            lines.append(f"  - {c['symbol']} {c['lean']} ({c['conviction']}): {why}")
+    else:
+        lines.append("No directional movers on the screen right now.")
+    lines.append("Decision-support only — not financial advice.")
+    return "\n".join(lines), movers
+
+
+@app.post("/brief/daily")
+def daily_brief(body: BriefRequest):
+    """Daily pre-market brief: scan the universe, compute the regime gate, and
+    deliver a short deterministic brief via the alert channels (Telegram/email).
+    Guarded by ALERT_SCHEDULER_KEY like the other scheduler entry points."""
+    expected = os.environ.get("ALERT_SCHEDULER_KEY", "").strip()
+    if expected and body.scheduler_key != expected:
+        raise HTTPException(status_code=403, detail="Invalid scheduler key.")
+
+    from backend.signals.scanner import scan_watchlist
+    cards = scan_watchlist(BRIEF_UNIVERSE, body.interval)
+    regime = regime_gate.evaluate_from_cards(cards)
+    message, movers = _compose_brief(regime, cards, body.interval)
+
+    delivered = []
+    chat_id = os.environ.get("ALERT_TELEGRAM_DEFAULT_CHAT_ID", "").strip()
+    if chat_id and alert_store._notify_telegram(chat_id, message):
+        delivered.append("telegram")
+    email = os.environ.get("ALERT_DIGEST_EMAIL", "").strip()
+    if email and alert_store._notify_email(email, "Trading Copilot daily market brief", message):
+        delivered.append("email")
+    return {"regime": regime, "movers": movers, "brief": message, "delivered": delivered}
 
 
 # --- Admin panel ---------------------------------------------------------------

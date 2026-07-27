@@ -25,6 +25,21 @@ type Consensus = {
   avg_conviction: number;
 };
 
+type ResearcherCase = {
+  side: string;
+  supporters: number;
+  avg_conviction: number;
+  points: string[];
+  agents: string[];
+};
+
+type RiskVerdict = {
+  verdict: "APPROVE" | "CAUTION" | "REJECT";
+  confidence: number;
+  reasons: string[];
+  note?: string;
+};
+
 type DebateResult = {
   symbol: string;
   interval: string;
@@ -33,6 +48,8 @@ type DebateResult = {
   synthesis: string;
   dissent: string;
   what_would_change_our_mind: string;
+  researchers?: { rounds: number; bull: ResearcherCase; bear: ResearcherCase };
+  risk?: RiskVerdict;
   disclaimer?: string;
   cost_usd?: number;
   cached?: boolean;
@@ -44,6 +61,11 @@ function leanColor(lean: string) {
 function leanBg(lean: string) {
   return lean === "bullish" ? "bg-bull/15 text-bull"
     : lean === "bearish" ? "bg-bear/15 text-bear" : "bg-white/10 text-neutral";
+}
+function riskStyle(v?: string) {
+  if (v === "APPROVE") return "bg-bull/15 text-bull border-bull/40";
+  if (v === "CAUTION") return "bg-yellow-400/10 text-yellow-300 border-yellow-400/40";
+  return "bg-bear/15 text-bear border-bear/40";
 }
 
 export default function Debate({ api, symbol, interval }: { api: Api; symbol: string; interval: string }) {
@@ -164,7 +186,55 @@ export default function Debate({ api, symbol, interval }: { api: Api; symbol: st
                 {data.what_would_change_our_mind}
               </p>
             )}
+
+            {/* Risk-desk verdict (deterministic decision-support, not an order) */}
+            {data.risk && (
+              <div className={`mt-4 rounded-xl border px-4 py-3 ${riskStyle(data.risk.verdict)}`}>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="font-bold text-sm uppercase tracking-wide">
+                    Risk desk: {data.risk.verdict}
+                  </span>
+                  <span className="text-[11px] opacity-75">decision-support, not an order</span>
+                </div>
+                {data.risk.reasons?.length > 0 && (
+                  <p className="text-xs opacity-85 mt-1">{data.risk.reasons.join(" · ")}</p>
+                )}
+              </div>
+            )}
           </div>
+
+          {/* Bull vs Bear researcher cases */}
+          {data.researchers && (
+            <div className="grid md:grid-cols-2 gap-3 mb-6">
+              {([data.researchers.bull, data.researchers.bear] as const).map((rc) => (
+                <div key={rc.side} className={`bg-panel rounded-xl border p-4 ${rc.side === "bullish" ? "border-bull/20" : "border-bear/20"}`}>
+                  <div className="flex items-center justify-between">
+                    <span className={`font-semibold text-sm ${rc.side === "bullish" ? "text-bull" : "text-bear"}`}>
+                      {rc.side === "bullish" ? "Bull case" : "Bear case"}
+                    </span>
+                    <span className="text-[11px] text-neutral/60">
+                      {rc.supporters} supporter{rc.supporters === 1 ? "" : "s"} · avg {rc.avg_conviction}
+                    </span>
+                  </div>
+                  {rc.points.length > 0 ? (
+                    <ul className="mt-2 space-y-1">
+                      {rc.points.slice(0, 5).map((p, i) => (
+                        <li key={i} className="text-xs text-gray-300 flex gap-2">
+                          <span className={rc.side === "bullish" ? "text-bull" : "text-bear"}>•</span>
+                          <span>{p}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-neutral/60 mt-2">No {rc.side} supporters on the panel.</p>
+                  )}
+                  {rc.agents?.length > 0 && (
+                    <p className="text-[10px] text-neutral/50 mt-2">via {rc.agents.join(", ")}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Agent cards */}
           <div className="grid md:grid-cols-2 gap-3">

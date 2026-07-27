@@ -152,24 +152,97 @@ def _rule_based_judgement(tally: dict) -> dict:
             "what_would_change_our_mind": "", "generated": "rule-based-fallback"}
 
 
-def debate(symbol: str = "BTCUSDT", interval: str = "1h",
-           include_kronos: bool = True,
-           ctx: MarketContext | None = None,
-           router: AIRouter | None = None) -> dict:
-    """Run the full multi-agent debate for a symbol. Returns a structured verdict.
+# --- bull/bear researcher rounds + risk verdict (deterministic, no extra LLM) ----
 
-    Panel (cheap tier) -> deterministic tally -> Judge (premium tier). The Judge's
-    confidence comes from the tally, so a split panel is honestly low-confidence.
+def build_researcher_case(cards: list[dict], side: str) -> dict:
+    """The strongest honest case for one side, assembled from the panel's own cards.
+
+    Collects the agents who leaned `side` and their cited evidence. Deterministic —
+    no LLM — so the researcher argues from what the panel actually said, never from
+    invented points. A side with no supporters argues an empty case (supporters=0).
     """
-    router = router or AIRouter()
-    if ctx is None:
-        ctx = build_market_context(symbol, interval, include_kronos=include_kronos)
+    usable = [c for c in cards if c.get("ok", True)]
+    supporters = [c for c in usable if c.get("lean") == side]
+    points: list[str] = []
+    for c in supporters:
+        for ev in c.get("key_evidence", []) or []:
+            if isinstance(ev, str) and ev:
+                points.append(ev)
+        if not c.get("key_evidence"):
+            # Fall back to the agent's rationale as a point when no evidence list.
+            r = c.get("rationale")
+            if isinstance(r, str) and r:
+                points.append(r)
+    convs = [c["conviction"] for c in supporters]
+    return {
+        "side": side,
+        "supporters": len(supporters),
+        "avg_conviction": round(sum(convs) / len(convs)) if convs else 0,
+        "points": points,
+        "agents": [c.get("name") or c.get("agent") for c in supporters],
+    }
 
-    cards = run_panel(ctx, router=router)
+
+def run_researcher_rounds(cards: list[dict], rounds: int = 1) -> dict:
+    """Bull vs bear advocate cases from the panel. `rounds` is accepted for API
+    parity with TradingAgents; with deterministic cases a single pass is the whole
+    honest argument (re-running yields the same evidence), so rounds is informational.
+    """
+    return {
+        "rounds": int(rounds),
+        "bull": build_researcher_case(cards, "bullish"),
+        "bear": build_researcher_case(cards, "bearish"),
+    }
+
+
+def risk_verdict(tally: dict, regime: dict | None = None) -> dict:
+    """A deterministic APPROVE / CAUTION / REJECT read over the consensus tally.
+
+    This is the risk-desk stage (TradingAgents' risk/PM gate) reduced to auditable
+    rules — NOT an execution order, a decision-support verdict for a human:
+      - REJECT  when the panel is divided (no edge in a split) or confidence is very low.
+      - APPROVE when aligned + confident + not overbought-stretched.
+      - CAUTION otherwise.
+    A CASH_PRIORITY market regime forces at least CAUTION (never a full approve in
+    a risk-off tape).
+    """
+    confidence = tally.get("confidence", 0)
+    divided = tally.get("divided", False)
+    agreement = tally.get("agreement", 0)
+    reasons: list[str] = []
+
+    if divided:
+        reasons.append(f"panel divided (agreement {agreement}%)")
+        verdict = "REJECT"
+    elif confidence < 45:
+        reasons.append(f"low confidence ({confidence})")
+        verdict = "REJECT"
+    elif confidence >= 65 and agreement >= 60:
+        reasons.append(f"aligned and confident ({confidence}, agreement {agreement}%)")
+        verdict = "APPROVE"
+    else:
+        reasons.append(f"moderate conviction ({confidence}, agreement {agreement}%)")
+        verdict = "CAUTION"
+
+    if regime and regime.get("state") == "CASH_PRIORITY" and verdict == "APPROVE":
+        verdict = "CAUTION"
+        reasons.append("market regime is risk-off (cash priority) — capped at caution")
+
+    return {"verdict": verdict, "confidence": confidence, "reasons": reasons,
+            "note": "Decision-support verdict, not an order and not financial advice."}
+
+
+def debate_from_cards(cards: list[dict], symbol: str, interval: str,
+                      router: AIRouter, researchers: bool = False,
+                      researcher_rounds: int = 1, regime: dict | None = None) -> dict:
+    """Core debate given pre-built agent cards. Extracted from debate() so the
+    researcher/risk stage is testable without a live MarketContext. The single-round
+    path (researchers=False) matches debate()'s classic output exactly.
+    """
     tally = tally_votes(cards)
 
     prompt = (
-        f"Asset: {ctx.symbol} ({ctx.interval}).\n\n"
+        f"Asset: {symbol} ({interval}).\n\n"
         f"ANALYST CARDS:\n{json.dumps([{k: c[k] for k in ('name','lean','conviction','rationale','key_evidence')} for c in cards], indent=2)}\n\n"
         f"DETERMINISTIC VOTE TALLY (authoritative for direction + confidence):\n"
         f"{json.dumps(tally, indent=2)}\n\n"
@@ -182,9 +255,9 @@ def debate(symbol: str = "BTCUSDT", interval: str = "1h",
     except json.JSONDecodeError:
         judgement = _rule_based_judgement(tally)
 
-    return {
-        "symbol": ctx.symbol,
-        "interval": ctx.interval,
+    out = {
+        "symbol": symbol,
+        "interval": interval,
         "consensus": {
             "lean": tally["direction"],
             "confidence": tally["confidence"],
@@ -201,3 +274,32 @@ def debate(symbol: str = "BTCUSDT", interval: str = "1h",
         "disclaimer": DEBATE_DISCLAIMER,
         "cost_usd": round(router.cost_log.total_usd, 5),
     }
+
+    if researchers:
+        out["researchers"] = run_researcher_rounds(cards, rounds=researcher_rounds)
+        out["risk"] = risk_verdict(tally, regime=regime)
+    return out
+
+
+def debate(symbol: str = "BTCUSDT", interval: str = "1h",
+           include_kronos: bool = True,
+           ctx: MarketContext | None = None,
+           router: AIRouter | None = None,
+           researchers: bool = False,
+           researcher_rounds: int = 1) -> dict:
+    """Run the full multi-agent debate for a symbol. Returns a structured verdict.
+
+    Panel (cheap tier) -> deterministic tally -> Judge (premium tier). The Judge's
+    confidence comes from the tally, so a split panel is honestly low-confidence.
+
+    When researchers=True, a bull/bear advocate stage plus a deterministic risk
+    verdict (approve/caution/reject) is added to the output — the TradingAgents-style
+    adversarial + risk-gate layer, with no extra LLM spend.
+    """
+    router = router or AIRouter()
+    if ctx is None:
+        ctx = build_market_context(symbol, interval, include_kronos=include_kronos)
+
+    cards = run_panel(ctx, router=router)
+    return debate_from_cards(cards, ctx.symbol, ctx.interval, router,
+                             researchers=researchers, researcher_rounds=researcher_rounds)

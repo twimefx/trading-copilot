@@ -53,12 +53,28 @@ function rsiTone(rsi?: number) {
   return "text-neutral";
 }
 
+function regimeStyle(state?: string) {
+  switch (state) {
+    case "FULL_RISK_ALLOWED":
+      return { label: "Full risk allowed", cls: "text-bull border-bull/40 bg-bull/10", dot: "bg-bull" };
+    case "SELECTIVE_ONLY":
+      return { label: "Selective only", cls: "text-yellow-300 border-yellow-400/40 bg-yellow-400/10", dot: "bg-yellow-400" };
+    case "CASH_PRIORITY":
+      return { label: "Cash priority", cls: "text-bear border-bear/40 bg-bear/10", dot: "bg-bear" };
+    case "RESEARCH_ONLY":
+      return { label: "Research only", cls: "text-neutral border-white/20 bg-white/5", dot: "bg-neutral" };
+    default:
+      return { label: "Regime unknown", cls: "text-neutral border-white/20 bg-white/5", dot: "bg-neutral" };
+  }
+}
+
 export default function Scanner({ api, onPick }: { api: Api; onPick?: (symbol: string) => void }) {
   const [symbols, setSymbols] = useState(CRYPTO_WATCHLIST.join(", "));
   const [interval, setIntervalVal] = useState("1h");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<ScanItem[]>([]);
+  const [regime, setRegime] = useState<any>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [scanned, setScanned] = useState(false);
 
@@ -75,6 +91,7 @@ export default function Scanner({ api, onPick }: { api: Api; onPick?: (symbol: s
       const list = symbols.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
       const data: any = await api.scan({ symbols: list, interval });
       setResults(data.results || []);
+      setRegime(data.regime || null);
       setScanned(true);
     } catch (e: any) {
       setError(e.message || "Scan failed");
@@ -149,6 +166,25 @@ export default function Scanner({ api, onPick }: { api: Api; onPick?: (symbol: s
       {error && (
         <div className="bg-bear/15 border border-bear/40 rounded-xl p-4 text-bear text-sm mb-6">
           {error}. The scan service may be busy — try again in a moment.
+        </div>
+      )}
+
+      {/* Market regime gate — decision-support, not an execution recommendation */}
+      {!loading && regime && (
+        <div className={`rounded-xl border p-4 mb-6 ${regimeStyle(regime.state).cls}`}>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="flex items-center gap-2 font-semibold text-sm">
+              <span className={`w-2 h-2 rounded-full ${regimeStyle(regime.state).dot}`} />
+              Market regime: {regimeStyle(regime.state).label}
+            </span>
+            {regime.breadth_pct != null && (
+              <span className="text-xs opacity-80">breadth {regime.breadth_pct}% ({regime.symbols_evaluated} symbols)</span>
+            )}
+            <span className="text-xs opacity-70 ml-auto">decision-support, not advice</span>
+          </div>
+          {regime.reasons && regime.reasons.length > 0 && (
+            <p className="text-xs opacity-80 mt-2">{regime.reasons.join(" · ")}</p>
+          )}
         </div>
       )}
 
