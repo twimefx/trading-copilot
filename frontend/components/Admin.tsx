@@ -161,7 +161,7 @@ export default function Admin({ api }: { api: Api }) {
             Search
           </button>
           <button onClick={() => setShowCreate((v) => !v)}
-            className="bg-accent hover:opacity-90 text-black rounded-lg px-4 py-2 text-sm font-semibold transition">
+            className="bg-blue hover:bg-bluehi text-white rounded-full px-4 py-2 text-sm font-semibold transition">
             + New user
           </button>
           <button onClick={() => setShowAudit((v) => !v)}
@@ -183,7 +183,7 @@ export default function Admin({ api }: { api: Api }) {
               <option value="premium">premium</option>
             </select>
             <button onClick={createUser}
-              className="bg-accent hover:opacity-90 text-black rounded-lg px-4 py-2 text-sm font-semibold transition">
+              className="bg-blue hover:bg-bluehi text-white rounded-full px-4 py-2 text-sm font-semibold transition">
               Create
             </button>
           </div>

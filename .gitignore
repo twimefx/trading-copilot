@@ -56,3 +56,10 @@ dogfood-output/
 
 # RunPod API key (Kronos GPU service)
 .runpod_key
+.runpod_key_latest
+
+# GitHub fine-grained PAT (Kronos image build)
+.gh_pat
+
+# Hermes scratch / temp files (may contain keys)
+.hermes/

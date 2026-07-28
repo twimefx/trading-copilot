@@ -116,7 +116,7 @@ export default function Strategy({ api, symbol, interval }: { api: Api; symbol: 
           onChange={(e) => setPrompt(e.target.value)}
           rows={2}
           placeholder="e.g. Buy when RSI drops below 30, sell above 65, with a 4% stop loss"
-          className="w-full bg-panelhi rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 ring-accent resize-none"
+          className="w-full bg-panelhi rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 ring-blue resize-none"
         />
         <div className="flex items-center justify-between gap-3 mt-3">
           <div className="flex flex-wrap gap-1.5">
@@ -130,7 +130,7 @@ export default function Strategy({ api, symbol, interval }: { api: Api; symbol: 
           <button
             onClick={() => run()}
             disabled={loading || !prompt.trim()}
-            className="shrink-0 bg-accent hover:bg-blue-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-semibold transition"
+            className="shrink-0 bg-blue hover:bg-bluehi disabled:opacity-50 text-white px-4 py-2 rounded-full text-sm font-semibold transition"
           >
             {loading ? "Backtesting…" : "Build & backtest"}
           </button>

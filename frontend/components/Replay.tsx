@@ -103,7 +103,7 @@ export default function Replay({ api, symbol, interval }: { api: Api; symbol: st
               type="datetime-local"
               value={asOf}
               onChange={(e) => setAsOf(e.target.value)}
-              className="bg-panelhi border border-white/10 rounded-lg px-3 py-2 text-sm text-white"
+              className="bg-panelhi border border-white/10 rounded-lg px-3 py-2 text-sm text-ink"
             />
           </div>
           <div>
@@ -114,7 +114,7 @@ export default function Replay({ api, symbol, interval }: { api: Api; symbol: st
                   key={m}
                   onClick={() => setMode(m)}
                   className={`px-3 py-1.5 rounded-md text-xs font-medium transition ${
-                    mode === m ? "bg-accent text-white" : "text-neutral hover:text-white"
+                    mode === m ? "bg-blue text-white" : "text-neutral hover:text-white"
                   }`}
                 >
                   {m === "copilot" ? "Copilot" : "Debate panel"}
@@ -125,7 +125,7 @@ export default function Replay({ api, symbol, interval }: { api: Api; symbol: st
           <button
             onClick={run}
             disabled={loading}
-            className="bg-accent hover:bg-blue-600 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-semibold"
+            className="bg-blue hover:bg-bluehi disabled:opacity-50 text-white px-5 py-2 rounded-full text-sm font-semibold"
           >
             {loading ? "Replaying…" : `Replay ${symbol}`}
           </button>

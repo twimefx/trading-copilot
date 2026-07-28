@@ -1,612 +1,381 @@
-"use client";
+import Link from "next/link";
 
-import { useEffect, useState } from "react";
-import { SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
-import TradingViewChart from "@/components/TradingViewChart";
-import Scanner from "@/components/Scanner";
-import Journal from "@/components/Journal";
-import Portfolio from "@/components/Portfolio";
-import Debate from "@/components/Debate";
-import Flow from "@/components/Flow";
-import Strategy from "@/components/Strategy";
-import Alerts from "@/components/Alerts";
-import TrackRecord from "@/components/TrackRecord";
-import Replay from "@/components/Replay";
-import Admin from "@/components/Admin";
-import { useApi, MeResponse } from "@/lib/api";
+// ─── Landing page (public) ──────────────────────────────────────────────────
+// Design intent: institutional trading terminal, not generic SaaS. Deep-space
+// background, a single gold accent for "intelligence", vivid bull/bear only
+// where market direction is shown. Real product features — no filler sections.
 
-// When Clerk isn't configured the app runs anonymously (no sign-in UI, no tier
-// badge) — matching the backend's open mode. Flip on by setting the Clerk keys.
-const CLERK_ENABLED = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
-
-type Range = { low: number | null; high: number | null; source: string };
-type Analysis = {
-  lean?: string;
-  conviction?: number;
-  summary?: string;
-  drivers?: string[];
-  risks?: string[];
-  range_24h?: Range;
-  suggested_invalidation?: string;
-  disclaimer?: string;
-  cost_usd?: number;
-  track_record?: string | null;
-  raw?: string;
+const FREE = {
+  name: "Free",
+  price: "$0",
+  cadence: "forever",
+  tagline: "Feel the terminal.",
+  features: [
+    "AI Market Copilot — 3 analyses / day",
+    "Crypto + Forex coverage",
+    "Explainable bullish / bearish / neutral calls",
+    "24h volatility range + invalidation",
+  ],
+  cta: "Start free",
+  href: "/app",
+  accent: false,
 };
 
-const CRYPTO_PRESETS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
-const FOREX_PRESETS = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "XAU_USD"];
+const PRO = {
+  name: "Pro",
+  price: "$49",
+  cadence: "/mo",
+  tagline: "For the disciplined trader.",
+  features: [
+    "Unlimited Copilot analyses",
+    "Market Scanner — ranked opportunities",
+    "Trade Journal + AI behavioral coaching",
+    "Portfolio Copilot — open-book risk read",
+    "Price & scanner alerts to Telegram",
+  ],
+  cta: "Go Pro",
+  href: "/app",
+  accent: false,
+};
 
-function leanColor(lean?: string) {
-  if (lean === "bullish") return "text-bull";
-  if (lean === "bearish") return "text-bear";
-  return "text-neutral";
-}
-function leanBg(lean?: string) {
-  if (lean === "bullish") return "bg-bull/15 border-bull/40";
-  if (lean === "bearish") return "bg-bear/15 border-bear/40";
-  return "bg-neutral/10 border-neutral/30";
-}
-function convictionLabel(c?: number) {
-  if (c == null) return "";
-  if (c >= 67) return "High";
-  if (c >= 40) return "Moderate";
-  return "Low";
-}
-function hasRange(r?: Range) {
-  return !!r && r.low != null && r.high != null;
-}
-// Price-aware formatter — mirrors the backend's magnitude-based precision so
-// forex/metals bands (e.g. 1.1437) don't collapse to "1.14 – 1.14".
-function fmtPrice(n?: number | null) {
-  if (n == null) return "—";
-  const v = Math.abs(n);
-  const dp = v >= 100 ? 2 : v >= 1 ? 4 : v >= 0.01 ? 5 : 6;
-  return n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
-}
+const PREMIUM = {
+  name: "Premium",
+  price: "$199",
+  cadence: "/mo",
+  tagline: "The full intelligence desk.",
+  features: [
+    "Everything in Pro",
+    "Multi-Agent Debate — 7 agents + judge",
+    "Bull/Bear researcher rounds + risk verdict",
+    "Institutional Flow — funding, OI, positioning",
+    "AI Strategy Builder — NL to real backtest",
+    "Kronos 24h volatility range on GPU",
+  ],
+  cta: "Go Premium",
+  href: "/app",
+  accent: true,
+};
 
-export default function Home() {
-  const api = useApi();
-  const signedIn = api.isSignedIn === true;
-  const authReady = api.isSignedIn !== undefined;
-  const [symbol, setSymbol] = useState("BTCUSDT");
-  const [interval, setIntervalVal] = useState("1h");
-  const [useKronos, setUseKronos] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [upgradePrompt, setUpgradePrompt] = useState(false);
-  const [result, setResult] = useState<Analysis | null>(null);
-  const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate" | "flow" | "strategy" | "alerts" | "track" | "replay" | "admin">("copilot");
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [journalRefresh, setJournalRefresh] = useState(0);
-  const [me, setMe] = useState<MeResponse | null>(null);
-  const [watchlist, setWatchlist] = useState<string[]>([]);
-  const [watchlistLoaded, setWatchlistLoaded] = useState(false);
-
-  async function refreshWatchlist() {
-    try {
-      const r = await api.watchlistGet();
-      setWatchlist(r.symbols);
-    } catch {
-      /* anonymous/open mode or backend cold — presets still work */
-    } finally {
-      setWatchlistLoaded(true);
-    }
-  }
-
-  async function toggleWatch(sym: string) {
-    const next = watchlist.includes(sym)
-      ? watchlist.filter((s) => s !== sym)
-      : [...watchlist, sym];
-    setWatchlist(next);                    // optimistic
-    try {
-      const r = await api.watchlistPut(next);
-      setWatchlist(r.symbols);
-    } catch {
-      /* keep optimistic state in open mode */
-    }
-  }
-
-  async function refreshMe() {
-    try {
-      setMe(await api.me());
-    } catch {
-      /* not signed in yet, or backend cold */
-    }
-  }
-
-  useEffect(() => {
-    if (api.isSignedIn) {
-      refreshMe();
-      refreshWatchlist();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api.isSignedIn]);
-
-  async function upgrade(tier: "pro" | "premium") {
-    try {
-      const url = await api.startCheckout(tier);
-      window.location.href = url;
-    } catch (e: any) {
-      setError(e.message || "Could not start checkout");
-    }
-  }
-
-  async function analyze() {
-    setLoading(true);
-    setError(null);
-    setUpgradePrompt(false);
-    setResult(null);
-    setSaveState("idle");
-    try {
-      const data = await api.copilot({ symbol, interval, include_kronos: useKronos });
-      setResult(data as Analysis);
-      refreshMe();
-    } catch (e: any) {
-      if (e?.status === 402) {
-        setUpgradePrompt(true);
-        setError(e.message || "Daily limit reached — upgrade to continue.");
-      } else {
-        setError(e.message || "Request failed");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function saveToJournal() {
-    if (!result) return;
-    setSaveState("saving");
-    try {
-      await api.journalSave({
-        symbol,
-        interval,
-        analysis: { ...result, symbol, interval },
-        status: "idea",
-      });
-      setSaveState("saved");
-      setJournalRefresh((n) => n + 1);
-    } catch {
-      setSaveState("error");
-    }
-  }
-
+function Logo() {
   return (
-    <main className="min-h-screen max-w-5xl mx-auto px-5 py-10">
-      <header className="mb-8 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">
-            AI Trading <span className="text-accent">Copilot</span>
-          </h1>
-          <p className="text-neutral mt-1 text-sm">
-            Market intelligence, explained. Not financial advice.
-          </p>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          {!CLERK_ENABLED ? (
-            <span className="text-[11px] text-neutral/60 border border-white/10 rounded-lg px-2.5 py-1">
-              Open preview
-            </span>
-          ) : signedIn ? (
-            <>
-              {me && <TierBadge me={me} onUpgrade={upgrade} onManage={async () => {
-                try { window.location.href = await api.openBillingPortal(); } catch {}
-              }} />}
-              <UserButton />
-            </>
-          ) : (
-            <>
-              <SignInButton mode="modal">
-                <button className="text-sm text-neutral hover:text-white px-3 py-1.5">Sign in</button>
-              </SignInButton>
-              <SignUpButton mode="modal">
-                <button className="bg-accent hover:bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold">
-                  Get started
-                </button>
-              </SignUpButton>
-            </>
-          )}
-        </div>
-      </header>
-
-      {CLERK_ENABLED && authReady && !signedIn && (
-        <div className="rounded-2xl border border-white/10 bg-panel p-10 text-center">
-          <h2 className="text-xl font-semibold">Sign in to run the Copilot</h2>
-          <p className="text-neutral text-sm mt-2 max-w-md mx-auto">
-            Get transparent, explainable market analysis on crypto and forex.
-            Free plan includes 3 analyses a day — upgrade for more, the scanner,
-            and the trade journal.
-          </p>
-          <div className="mt-5 flex justify-center gap-3">
-            <SignUpButton mode="modal">
-              <button className="bg-accent hover:bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-semibold">
-                Create free account
-              </button>
-            </SignUpButton>
-            <SignInButton mode="modal">
-              <button className="bg-panelhi hover:bg-white/10 text-white px-5 py-2 rounded-lg text-sm font-semibold">
-                Sign in
-              </button>
-            </SignInButton>
-          </div>
-        </div>
-      )}
-
-      {signedIn && (
-      <>
-        {/* signed-in app */}
-
-      {/* Tabs */}
-      <div className="flex gap-2 mb-6 border-b border-white/10 flex-wrap">
-        {((): readonly (typeof view)[] => {
-          const base = ["copilot", "scanner", "journal", "portfolio", "debate", "flow", "strategy", "alerts", "track", "replay"] as const;
-          return me?.is_admin ? [...base, "admin" as const] : base;
-        })().map((t) => (
-          <button
-            key={t}
-            onClick={() => setView(t)}
-            className={`px-4 py-2 text-sm font-medium transition border-b-2 -mb-px ${
-              view === t
-                ? t === "admin" ? "border-accent text-accent" : "border-accent text-white"
-                : "border-transparent text-neutral hover:text-white"
-            }`}
-          >
-            {t === "copilot" ? "AI Copilot" : t === "scanner" ? "Scanner" : t === "journal" ? "Journal" : t === "portfolio" ? "Portfolio" : t === "debate" ? "Debate" : t === "flow" ? "Flow" : t === "strategy" ? "Strategy" : t === "alerts" ? "Alerts" : t === "replay" ? "Replay" : t === "admin" ? "Admin" : "Track Record"}
-          </button>
-        ))}
-      </div>
-
-      {view === "admin" && me?.is_admin && <Admin api={api} />}
-
-      {view === "journal" && <Journal api={api} refreshKey={journalRefresh} />}
-
-      {view === "portfolio" && <Portfolio api={api} refreshKey={journalRefresh} />}
-
-      {view === "debate" && <Debate api={api} symbol={symbol} interval={interval} />}
-
-      {view === "flow" && <Flow api={api} symbol={symbol} period={interval} />}
-
-      {view === "strategy" && <Strategy api={api} symbol={symbol} interval={interval} />}
-
-      {view === "alerts" && <Alerts api={api} watchlist={watchlist} />}
-
-      {view === "track" && <TrackRecord api={api} />}
-
-      {view === "replay" && <Replay api={api} symbol={symbol} interval={interval} />}
-
-      {view === "scanner" && (
-        <Scanner
-          api={api}
-          onPick={(s) => {
-            setSymbol(s);
-            setView("copilot");
-            setResult(null);
-          }}
-        />
-      )}
-
-      {view === "copilot" && (
-      <>
-      {/* Controls */}
-      <div className="bg-panel rounded-2xl border border-white/5 p-5 mb-6">
-        <div className="flex flex-wrap gap-2 mb-3">
-          {watchlistLoaded && watchlist.length > 0 && (
-            <>
-              {watchlist.map((p) => (
-                <button
-                  key={`wl-${p}`}
-                  onClick={() => setSymbol(p)}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                    symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
-                  }`}
-                >
-                  <span className="text-accent mr-1">★</span>{p.replace("_", "/")}
-                </button>
-              ))}
-              <span className="w-px bg-white/10 mx-1" />
-            </>
-          )}
-          {CRYPTO_PRESETS.map((p) => (
-            <span key={p} className="relative inline-flex">
-              <button
-                onClick={() => setSymbol(p)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                  symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
-                }`}
-              >
-                {p}
-              </button>
-              <button
-                onClick={() => toggleWatch(p)}
-                title={watchlist.includes(p) ? "Remove from watchlist" : "Save to watchlist"}
-                className={`absolute -top-1.5 -right-1.5 text-[10px] w-4 h-4 rounded-full leading-none ${
-                  watchlist.includes(p) ? "text-accent" : "text-neutral/50 hover:text-accent"
-                }`}
-              >
-                {watchlist.includes(p) ? "★" : "☆"}
-              </button>
-            </span>
-          ))}
-          <span className="w-px bg-white/10 mx-1" />
-          {FOREX_PRESETS.map((p) => (
-            <span key={p} className="relative inline-flex">
-              <button
-                onClick={() => setSymbol(p)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-                  symbol === p ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
-                }`}
-              >
-                {p.replace("_", "/")}
-              </button>
-              <button
-                onClick={() => toggleWatch(p)}
-                title={watchlist.includes(p) ? "Remove from watchlist" : "Save to watchlist"}
-                className={`absolute -top-1.5 -right-1.5 text-[10px] w-4 h-4 rounded-full leading-none ${
-                  watchlist.includes(p) ? "text-accent" : "text-neutral/50 hover:text-accent"
-                }`}
-              >
-                {watchlist.includes(p) ? "★" : "☆"}
-              </button>
-            </span>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <input
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            className="bg-panelhi rounded-lg px-3 py-2 text-sm flex-1 min-w-[140px] outline-none focus:ring-1 ring-accent"
-            placeholder="Symbol e.g. BTCUSDT"
-          />
-          <button
-            onClick={() => toggleWatch(symbol)}
-            title={watchlist.includes(symbol) ? "Remove from watchlist" : "Save to watchlist"}
-            className={`text-lg leading-none px-1 ${watchlist.includes(symbol) ? "text-accent" : "text-neutral/40 hover:text-accent"}`}
-          >
-            {watchlist.includes(symbol) ? "★" : "☆"}
-          </button>
-          <select
-            value={interval}
-            onChange={(e) => setIntervalVal(e.target.value)}
-            className="bg-panelhi rounded-lg px-3 py-2 text-sm outline-none"
-          >
-            {["15m", "1h", "4h", "1d"].map((i) => (
-              <option key={i} value={i}>{i}</option>
-            ))}
-          </select>
-          <label className="flex items-center gap-2 text-sm text-neutral cursor-pointer">
-            <input type="checkbox" checked={useKronos} onChange={(e) => setUseKronos(e.target.checked)} />
-            Kronos range
-          </label>
-          <button
-            onClick={analyze}
-            disabled={loading}
-            className="bg-accent hover:bg-blue-600 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-semibold transition"
-          >
-            {loading ? "Analyzing…" : "Analyze"}
-          </button>
-        </div>
-        {useKronos && (
-          <p className="text-xs text-neutral/70 mt-2">
-            Kronos range adds a CPU forecast (~30–90s). Off = faster.
-          </p>
-        )}
-      </div>
-
-      {/* Live chart */}
-      <div className="mb-6">
-        <TradingViewChart symbol={symbol} interval={interval} />
-      </div>
-
-      {error && !upgradePrompt && (
-        <div className="bg-bear/15 border border-bear/40 rounded-xl p-4 text-bear text-sm mb-6">
-          {error}. The analysis service may be busy — try again in a moment.
-        </div>
-      )}
-
-      {upgradePrompt && (
-        <div className="bg-accent/10 border border-accent/40 rounded-xl p-5 mb-6">
-          <div className="font-semibold text-white">You've hit your daily free limit</div>
-          <p className="text-sm text-neutral mt-1">{error}</p>
-          <div className="mt-3 flex gap-2">
-            <button onClick={() => upgrade("pro")}
-              className="bg-accent hover:bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-semibold">
-              Upgrade to Pro
-            </button>
-            <button onClick={() => upgrade("premium")}
-              className="bg-panelhi hover:bg-white/10 text-white px-4 py-1.5 rounded-lg text-sm font-semibold">
-              Go Premium
-            </button>
-          </div>
-        </div>
-      )}
-
-      {loading && !result && (
-        <div className="space-y-4 animate-pulse">
-          <div className="rounded-2xl border border-white/5 bg-panel p-6 h-44" />
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="rounded-2xl border border-white/5 bg-panel h-40" />
-            <div className="rounded-2xl border border-white/5 bg-panel h-40" />
-          </div>
-          <p className="text-center text-xs text-neutral">Opus is analyzing {symbol.replace("_", "/")}…</p>
-        </div>
-      )}
-
-      {result && (
-        <div className="space-y-4">
-          {/* Verdict */}
-          <div className={`rounded-2xl border p-6 ${leanBg(result.lean)}`}>
-            <div className="flex items-baseline justify-between">
-              <div>
-                <span className="text-neutral text-sm">{symbol.replace("_", "/")} · {interval}</span>
-                <div className={`text-3xl font-bold uppercase ${leanColor(result.lean)}`}>
-                  {result.lean}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-neutral text-xs">CONVICTION</div>
-                <div className="text-3xl font-bold">{result.conviction}<span className="text-neutral text-lg">/100</span></div>
-                <div className={`text-xs font-semibold ${leanColor(result.lean)}`}>{convictionLabel(result.conviction)}</div>
-              </div>
-            </div>
-            <div className="mt-3 h-2 bg-black/30 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-700 ${result.lean === "bullish" ? "bg-bull" : result.lean === "bearish" ? "bg-bear" : "bg-neutral"}`}
-                style={{ width: `${result.conviction ?? 0}%` }}
-              />
-            </div>
-            <p className="mt-4 text-sm leading-relaxed text-gray-200">{result.summary}</p>
-
-            {/* Reflection loop — this call was made with our scored track record in view */}
-            {result.track_record && (
-              <p className="mt-3 text-[12px] leading-relaxed text-neutral border-l-2 border-accent/40 pl-3">
-                {result.track_record}
-              </p>
-            )}
-
-            {/* Data coverage — transparent about what fed the call */}
-            <div className="mt-4 flex flex-wrap gap-2 pt-3 border-t border-white/10">
-              <span className="text-[11px] text-neutral/70 mr-1 self-center">INPUTS:</span>
-              <Coverage label="Technicals" on />
-              <Coverage label="Funding / OI" on={false} hint="geo-restricted on host" />
-              <Coverage
-                label="Kronos range"
-                on={result.range_24h?.source === "Kronos"}
-                hint={result.range_24h?.source === "Kronos" ? undefined : "using ATR estimate"}
-              />
-            </div>
-          </div>
-
-          {/* Drivers + Risks */}
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="bg-panel rounded-2xl border border-white/5 p-5">
-              <h3 className="text-bull font-semibold text-sm mb-3">DRIVERS</h3>
-              <ul className="space-y-2 text-sm text-gray-300">
-                {result.drivers?.map((d, i) => (
-                  <li key={i} className="flex gap-2"><span className="text-bull">+</span>{d}</li>
-                ))}
-              </ul>
-            </div>
-            <div className="bg-panel rounded-2xl border border-white/5 p-5">
-              <h3 className="text-bear font-semibold text-sm mb-3">RISKS</h3>
-              <ul className="space-y-2 text-sm text-gray-300">
-                {result.risks?.map((r, i) => (
-                  <li key={i} className="flex gap-2"><span className="text-bear">!</span>{r}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-
-          {/* Range + invalidation */}
-          <div className="grid md:grid-cols-2 gap-4">
-            {hasRange(result.range_24h) ? (
-              <div className="bg-panel rounded-2xl border border-white/5 p-5">
-                <h3 className="text-accent font-semibold text-sm mb-2">
-                  24H RANGE <span className="text-neutral/60 font-normal">· {result.range_24h!.source}</span>
-                </h3>
-                <div className="text-lg font-mono">
-                  ${fmtPrice(result.range_24h!.low)} – ${fmtPrice(result.range_24h!.high)}
-                </div>
-                <p className="text-xs text-neutral mt-1">
-                  {result.range_24h!.source === "Kronos"
-                    ? "Kronos volatility forecast — a likely band, not a direction call."
-                    : "ATR-based volatility estimate. Enable Kronos range for the model forecast."}
-                </p>
-              </div>
-            ) : (
-              <div className="bg-panel rounded-2xl border border-dashed border-white/10 p-5">
-                <h3 className="text-neutral font-semibold text-sm mb-2">24H RANGE</h3>
-                <p className="text-xs text-neutral/70">
-                  Volatility band unavailable for this analysis.
-                </p>
-              </div>
-            )}
-            {result.suggested_invalidation && (
-              <div className="bg-panel rounded-2xl border border-white/5 p-5">
-                <h3 className="text-yellow-400 font-semibold text-sm mb-2">INVALIDATION</h3>
-                <p className="text-sm text-gray-300">{result.suggested_invalidation}</p>
-              </div>
-            )}
-          </div>
-
-          <div className="flex justify-between items-center text-xs text-neutral pt-2">
-            <span className="font-mono">analysis cost: ${result.cost_usd != null ? result.cost_usd.toFixed(4) : "—"}</span>
-            <div className="flex items-center gap-3">
-              {saveState === "saved" && <span className="text-bull">✓ Saved to Journal</span>}
-              {saveState === "error" && <span className="text-bear">Save failed — retry</span>}
-              <button
-                onClick={saveToJournal}
-                disabled={saveState === "saving" || saveState === "saved"}
-                className="bg-panelhi hover:bg-white/10 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition"
-              >
-                {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : "+ Save to Journal"}
-              </button>
-              <span className="text-neutral/50">Opus reasoning</span>
-            </div>
-          </div>
-          <p className="text-xs text-neutral/60 border-t border-white/5 pt-3">{result.disclaimer}</p>
-        </div>
-      )}
-      </>
-      )}
-      </>
-      )}
-    </main>
+    <span className="inline-flex items-center gap-2.5">
+      <span className="relative inline-flex h-7 w-7 items-center justify-center rounded-md bg-accent/15 ring-1 ring-accent/40">
+        {/* candlestick mark */}
+        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden>
+          <path d="M7 8v8M7 6v2M7 16v2" stroke="#e8c468" strokeWidth="1.6" strokeLinecap="round" />
+          <rect x="5.6" y="9" width="2.8" height="6" rx="0.8" fill="#16c784" />
+          <path d="M17 6v9M17 4v2M17 15v3" stroke="#e8c468" strokeWidth="1.6" strokeLinecap="round" />
+          <rect x="15.6" y="7" width="2.8" height="8" rx="0.8" fill="#ea3943" />
+        </svg>
+      </span>
+      <span className="text-[15px] font-semibold tracking-tight text-ink">
+        AI Trading <span className="text-accent">Copilot</span>
+      </span>
+    </span>
   );
 }
 
-function TierBadge({
-  me,
-  onUpgrade,
-  onManage,
-}: {
-  me: MeResponse;
-  onUpgrade: (tier: "pro" | "premium") => void;
-  onManage: () => void;
-}) {
-  const label = me.tier.toUpperCase();
-  const color =
-    me.tier === "premium" ? "bg-yellow-400/15 text-yellow-300 border-yellow-400/40"
-    : me.tier === "pro" ? "bg-accent/15 text-accent border-accent/40"
-    : "bg-white/5 text-neutral border-white/10";
-  const remaining =
-    me.copilot_calls_remaining == null ? "∞" : `${me.copilot_calls_remaining}`;
+function Nav() {
   return (
-    <div className="flex items-center gap-2">
-      <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border ${color}`}>
-        {label}
-        <span className="ml-1.5 font-normal opacity-70">{remaining} left today</span>
-      </span>
-      {me.tier === "free" && (
-        <button
-          onClick={() => onUpgrade("pro")}
-          className="bg-accent hover:bg-blue-600 text-white px-3 py-1 rounded-lg text-[11px] font-semibold"
-        >
-          Upgrade
-        </button>
-      )}
-      {me.tier !== "free" && (
-        <button
-          onClick={onManage}
-          className="text-[11px] text-neutral hover:text-white underline"
-        >
-          Manage
-        </button>
-      )}
+    <header className="sticky top-0 z-40 border-b border-white/5 bg-bg/80 backdrop-blur-md">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
+        <Link href="/" aria-label="Home"><Logo /></Link>
+        <nav className="hidden items-center gap-7 text-sm text-neutral md:flex">
+          <a href="#features" className="hover:text-ink transition-colors">Features</a>
+          <a href="#how" className="hover:text-ink transition-colors">How it works</a>
+          <a href="#pricing" className="hover:text-ink transition-colors">Pricing</a>
+        </nav>
+        <div className="flex items-center gap-3">
+          <Link href="/app" className="text-sm text-neutral hover:text-ink transition-colors">
+            Sign in
+          </Link>
+          <Link
+            href="/app"
+            className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-bg shadow-glow transition hover:bg-accenthi"
+          >
+            Open the terminal
+          </Link>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function Ticker() {
+  // Decorative, honest placeholder ticks (no fake live data claims).
+  const items = [
+    ["BTCUSDT", "+2.4%", "bull"], ["ETHUSDT", "+1.1%", "bull"], ["SOLUSDT", "-0.8%", "bear"],
+    ["EUR/USD", "+0.2%", "bull"], ["XAU/USD", "+0.6%", "bull"], ["GBP/USD", "-0.3%", "bear"],
+    ["BNBUSDT", "+0.9%", "bull"], ["USD/JPY", "-0.1%", "bear"], ["XRPUSDT", "+3.2%", "bull"],
+  ] as const;
+  const row = [...items, ...items];
+  return (
+    <div className="relative overflow-hidden border-y border-white/5 bg-panel/40 py-3">
+      <div className="ticker-track flex w-max gap-10 whitespace-nowrap px-5">
+        {row.map(([s, c, d], i) => (
+          <span key={i} className="inline-flex items-center gap-2 text-[13px] font-mono">
+            <span className="text-neutral">{s}</span>
+            <span className={d === "bull" ? "text-bull" : "text-bear"}>{c}</span>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
 
-function Coverage({ label, on, hint }: { label: string; on: boolean; hint?: string }) {
+function Hero() {
   return (
-    <span
-      title={hint}
-      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] font-medium ${
-        on ? "bg-bull/10 text-bull" : "bg-white/5 text-neutral/60"
+    <section className="relative overflow-hidden">
+      {/* soft radial glow, not a heavy gradient */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(60% 50% at 50% 0%, rgba(232,196,104,0.08), transparent 70%), radial-gradient(50% 40% at 80% 30%, rgba(22,199,132,0.05), transparent 70%)",
+        }}
+      />
+      <div className="relative mx-auto max-w-6xl px-5 pt-24 pb-16 text-center">
+        <span className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3.5 py-1.5 text-xs font-medium text-accenthi">
+          <span className="h-1.5 w-1.5 rounded-full bg-bull" />
+          Market intelligence, explained — not advice
+        </span>
+        <h1 className="mx-auto mt-6 max-w-3xl text-5xl font-semibold leading-[1.05] tracking-tightest text-ink md:text-7xl">
+          Trade with a{" "}
+          <span className="bg-gradient-to-r from-accenthi via-accent to-accenthi bg-clip-text text-transparent">
+            research desk
+          </span>{" "}
+          in your corner.
+        </h1>
+        <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-neutral">
+          The Copilot reads price, positioning, and volatility across crypto and forex,
+          then explains its reasoning in plain language — every call backed by evidence,
+          never a black box.
+        </p>
+        <div className="mt-10 flex items-center justify-center gap-4">
+          <Link
+            href="/app"
+            className="rounded-full bg-accent px-7 py-3.5 text-base font-semibold text-bg shadow-glow transition hover:bg-accenthi"
+          >
+            Start analyzing free
+          </Link>
+          <a
+            href="#pricing"
+            className="rounded-full border border-white/15 px-7 py-3.5 text-base font-semibold text-ink transition hover:border-accent/50 hover:text-accenthi"
+          >
+            See pricing
+          </a>
+        </div>
+        <p className="mt-5 text-xs text-neutral/70">
+          Free plan · 3 analyses a day · no card required
+        </p>
+      </div>
+      <Ticker />
+    </section>
+  );
+}
+
+function FeatureCard({
+  kicker, title, body, tone,
+}: { kicker: string; title: string; body: string; tone?: "gold" | "bull" | "bear" }) {
+  const ring =
+    tone === "gold" ? "hover:border-accent/40" : tone === "bull" ? "hover:border-bull/40" : tone === "bear" ? "hover:border-bear/40" : "hover:border-white/20";
+  const chip =
+    tone === "gold" ? "text-accent bg-accent/10 border-accent/30" : tone === "bull" ? "text-bull bg-bull/10 border-bull/30" : tone === "bear" ? "text-bear bg-bear/10 border-bear/30" : "text-neutral bg-white/5 border-white/15";
+  return (
+    <div className={`group rounded-xl2 border border-white/10 bg-panel p-7 shadow-card transition ${ring}`}>
+      <span className={`inline-block rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${chip}`}>
+        {kicker}
+      </span>
+      <h3 className="mt-4 text-xl font-semibold tracking-tight text-ink">{title}</h3>
+      <p className="mt-2.5 text-[15px] leading-relaxed text-neutral">{body}</p>
+    </div>
+  );
+}
+
+function Features() {
+  return (
+    <section id="features" className="mx-auto max-w-6xl px-5 py-24">
+      <div className="max-w-2xl">
+        <p className="text-sm font-semibold uppercase tracking-widest text-accent">The desk</p>
+        <h2 className="mt-3 text-4xl font-semibold tracking-tightest text-ink md:text-5xl">
+          Six instruments. One intelligence layer.
+        </h2>
+        <p className="mt-4 text-lg text-neutral">
+          Each tool is deterministic where it counts and explainable where it matters —
+          the model computes the real numbers first, then reasons over them.
+        </p>
+      </div>
+      <div className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <FeatureCard tone="gold" kicker="Copilot"
+          title="AI Market Copilot"
+          body="A grounded read on any symbol — momentum, trend, positioning, and a 24h volatility range — with the evidence cited and the reasoning shown." />
+        <FeatureCard kicker="Scanner"
+          title="Market Scanner"
+          body="Rank a whole watchlist by signal strength with a 4-state market-regime gate, so you see when the tape favors risk and when it doesn't." />
+        <FeatureCard kicker="Debate"
+          title="Multi-Agent Debate"
+          body="Seven specialist agents argue bull and bear cases, a judge weighs them, and a risk desk issues an approve / caution / reject verdict." />
+        <FeatureCard kicker="Flow"
+          title="Institutional Flow"
+          body="Funding, open interest, and positioning — the derivatives tape institutions watch — interpreted into a plain-language regime." />
+        <FeatureCard kicker="Strategy"
+          title="AI Strategy Builder"
+          body="Describe a strategy in plain English; deterministic, look-ahead-safe code backtests it and shows the honest result against buy-and-hold." />
+        <FeatureCard tone="bull" kicker="Journal"
+          title="Journal + Coaching"
+          body="Log trades, and an AI coach reads your behavior — patterns in sizing, timing, and discipline — not just P&L." />
+      </div>
+    </section>
+  );
+}
+
+function HowItWorks() {
+  const steps = [
+    ["01", "Real data first", "Live crypto and forex feeds, derivatives positioning, and a Kronos volatility model on GPU. No fabricated numbers."],
+    ["02", "Deterministic core", "Indicators, ranges, and backtests are computed by code — auditable and reproducible — before any model speaks."],
+    ["03", "Explainable reasoning", "The AI only interprets the verified numbers and shows its evidence, so you can judge the call yourself."],
+  ] as const;
+  return (
+    <section id="how" className="border-y border-white/5 bg-panel/30">
+      <div className="mx-auto max-w-6xl px-5 py-24">
+        <p className="text-sm font-semibold uppercase tracking-widest text-accent">Why it’s different</p>
+        <h2 className="mt-3 max-w-2xl text-4xl font-semibold tracking-tightest text-ink md:text-5xl">
+          Built to be trusted, not just believed.
+        </h2>
+        <div className="mt-12 grid gap-5 md:grid-cols-3">
+          {steps.map(([n, t, b]) => (
+            <div key={n} className="rounded-xl2 border border-white/10 bg-bg/60 p-7">
+              <span className="font-mono text-sm text-accent">{n}</span>
+              <h3 className="mt-3 text-lg font-semibold text-ink">{t}</h3>
+              <p className="mt-2 text-[15px] leading-relaxed text-neutral">{b}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-8 max-w-3xl text-sm leading-relaxed text-neutral/80">
+          Honest by design: the Copilot is decision-support, not financial advice. It never
+          promises returns, and it tells you when the data isn’t there.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function TierCard({ t }: { t: typeof FREE }) {
+  return (
+    <div
+      className={`relative flex flex-col rounded-xl2 border p-8 shadow-card transition ${
+        t.accent
+          ? "border-accent/50 bg-gradient-to-b from-panelhi to-panel shadow-glow"
+          : "border-white/10 bg-panel hover:border-white/20"
       }`}
     >
-      <span className={`w-1.5 h-1.5 rounded-full ${on ? "bg-bull" : "bg-neutral/50"}`} />
-      {label}
-      {!on && hint && <span className="text-neutral/40">· {hint}</span>}
-    </span>
+      {t.accent && (
+        <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-accent px-3 py-0.5 text-[11px] font-bold uppercase tracking-wider text-bg">
+          Most powerful
+        </span>
+      )}
+      <h3 className="text-lg font-semibold text-ink">{t.name}</h3>
+      <p className="mt-1 text-sm text-neutral">{t.tagline}</p>
+      <div className="mt-5 flex items-baseline gap-1">
+        <span className="text-4xl font-semibold tracking-tight text-ink">{t.price}</span>
+        <span className="text-sm text-neutral">{t.cadence}</span>
+      </div>
+      <ul className="mt-6 flex-1 space-y-3">
+        {t.features.map((f) => (
+          <li key={f} className="flex gap-2.5 text-[15px] text-neutral">
+            <svg viewBox="0 0 20 20" className={`mt-0.5 h-4 w-4 shrink-0 ${t.accent ? "text-accent" : "text-bull"}`} fill="currentColor" aria-hidden>
+              <path fillRule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-7 7a1 1 0 01-1.4 0l-3-3a1 1 0 111.4-1.4l2.3 2.3 6.3-6.3a1 1 0 011.4 0z" clipRule="evenodd" />
+            </svg>
+            {f}
+          </li>
+        ))}
+      </ul>
+      <Link
+        href={t.href}
+        className={`mt-8 rounded-full py-3 text-center text-sm font-semibold transition ${
+          t.accent
+            ? "bg-accent text-bg hover:bg-accenthi"
+            : "border border-white/15 text-ink hover:border-accent/50 hover:text-accenthi"
+        }`}
+      >
+        {t.cta}
+      </Link>
+    </div>
+  );
+}
+
+function Pricing() {
+  return (
+    <section id="pricing" className="mx-auto max-w-6xl px-5 py-24">
+      <div className="mx-auto max-w-2xl text-center">
+        <p className="text-sm font-semibold uppercase tracking-widest text-accent">Pricing</p>
+        <h2 className="mt-3 text-4xl font-semibold tracking-tightest text-ink md:text-5xl">
+          Pay for the desk you actually use.
+        </h2>
+        <p className="mt-4 text-lg text-neutral">
+          Start free. Upgrade when the terminal earns its seat.
+        </p>
+      </div>
+      <div className="mt-14 grid gap-6 md:grid-cols-3">
+        <TierCard t={FREE} />
+        <TierCard t={PRO} />
+        <TierCard t={PREMIUM} />
+      </div>
+      <p className="mt-8 text-center text-xs text-neutral/70">
+        Prices in USD. Cancel anytime. Analysis is decision-support, not financial advice.
+      </p>
+    </section>
+  );
+}
+
+function FinalCta() {
+  return (
+    <section className="border-t border-white/5">
+      <div className="mx-auto max-w-6xl px-5 py-24 text-center">
+        <h2 className="mx-auto max-w-2xl text-4xl font-semibold tracking-tightest text-ink md:text-5xl">
+          Your next read is one click away.
+        </h2>
+        <p className="mx-auto mt-4 max-w-xl text-lg text-neutral">
+          Open the terminal and run your first analysis in under a minute.
+        </p>
+        <Link
+          href="/app"
+          className="mt-9 inline-block rounded-full bg-accent px-9 py-4 text-base font-semibold text-bg shadow-glow transition hover:bg-accenthi"
+        >
+          Open the terminal
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="border-t border-white/5">
+      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-10 text-sm text-neutral md:flex-row">
+        <Logo />
+        <p className="text-xs text-neutral/70">
+          AI Trading Copilot — market intelligence, explained. Not financial advice.
+        </p>
+        <Link href="/app" className="hover:text-accenthi transition-colors">
+          Open the terminal →
+        </Link>
+      </div>
+    </footer>
+  );
+}
+
+export default function Landing() {
+  return (
+    <main className="min-h-screen bg-bg text-ink antialiased">
+      <Nav />
+      <Hero />
+      <Features />
+      <HowItWorks />
+      <Pricing />
+      <FinalCta />
+      <Footer />
+    </main>
   );
 }

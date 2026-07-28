@@ -114,7 +114,7 @@ export default function Journal({ api, refreshKey }: { api: Api; refreshKey?: nu
             key={s}
             onClick={() => setFilter(s)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition ${
-              filter === s ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
+              filter === s ? "bg-blue text-white" : "bg-panelhi text-neutral hover:text-white"
             }`}
           >
             {s}
@@ -229,7 +229,7 @@ function CoachPanel({ api, refreshKey }: { api: Api; refreshKey?: number }) {
         <button
           onClick={run}
           disabled={loading}
-          className="shrink-0 bg-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
+          className="shrink-0 bg-blue hover:bg-bluehi disabled:opacity-50 text-white px-3 py-1.5 rounded-full text-xs font-semibold transition"
         >
           {loading ? "Analyzing…" : data ? "Re-run" : "Analyze my trading"}
         </button>
@@ -363,7 +363,7 @@ function EntryCard({
             key={s}
             onClick={() => onPatch(entry.id, { status: s })}
             className={`px-2 py-1 rounded text-[11px] capitalize transition ${
-              entry.status === s ? "bg-accent text-white" : "bg-panelhi text-neutral hover:text-white"
+              entry.status === s ? "bg-blue text-white" : "bg-panelhi text-neutral hover:text-white"
             }`}
           >
             {s}
@@ -403,25 +403,25 @@ function EntryCard({
         <div className="mt-3 grid sm:grid-cols-3 gap-3">
           <Field label="Entry price">
             <input type="number" value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)}
-              className="w-full bg-panelhi rounded px-2 py-1.5 text-sm outline-none focus:ring-1 ring-accent" />
+              className="w-full bg-panelhi rounded px-2 py-1.5 text-sm outline-none focus:ring-1 ring-blue" />
           </Field>
           <Field label="Exit price">
             <input type="number" value={exitPrice} onChange={(e) => setExitPrice(e.target.value)}
-              className="w-full bg-panelhi rounded px-2 py-1.5 text-sm outline-none focus:ring-1 ring-accent" />
+              className="w-full bg-panelhi rounded px-2 py-1.5 text-sm outline-none focus:ring-1 ring-blue" />
           </Field>
           <Field label="P&L">
             <input type="number" value={pnl} onChange={(e) => setPnl(e.target.value)}
-              className="w-full bg-panelhi rounded px-2 py-1.5 text-sm outline-none focus:ring-1 ring-accent" />
+              className="w-full bg-panelhi rounded px-2 py-1.5 text-sm outline-none focus:ring-1 ring-blue" />
           </Field>
           <div className="sm:col-span-3">
             <Field label="Notes">
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-                className="w-full bg-panelhi rounded px-2 py-1.5 text-sm outline-none focus:ring-1 ring-accent resize-none" />
+                className="w-full bg-panelhi rounded px-2 py-1.5 text-sm outline-none focus:ring-1 ring-blue resize-none" />
             </Field>
           </div>
           <div className="sm:col-span-3 flex justify-end">
             <button onClick={saveDetails}
-              className="bg-accent hover:bg-blue-600 text-white px-4 py-1.5 rounded text-sm font-semibold transition">
+              className="bg-blue hover:bg-bluehi text-white px-4 py-1.5 rounded-full text-sm font-semibold transition">
               Save details
             </button>
           </div>

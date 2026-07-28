@@ -179,7 +179,7 @@ export default function Alerts({ api, watchlist }: { api: Api; watchlist: string
           <button
             onClick={createRule}
             disabled={loading}
-            className="bg-accent hover:bg-blue-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-semibold"
+            className="bg-blue hover:bg-bluehi disabled:opacity-50 text-white px-4 py-2 rounded-full text-sm font-semibold"
           >
             {loading ? "Creating…" : "Create alert"}
           </button>

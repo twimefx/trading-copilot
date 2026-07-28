@@ -141,7 +141,7 @@ export default function Scanner({ api, onPick }: { api: Api; onPick?: (symbol: s
           value={symbols}
           onChange={(e) => setSymbols(e.target.value)}
           rows={2}
-          className="w-full bg-panelhi rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 ring-accent resize-none font-mono"
+          className="w-full bg-panelhi rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 ring-blue resize-none font-mono"
           placeholder="BTCUSDT, ETHUSDT, EUR_USD…"
         />
         <div className="flex flex-wrap items-center gap-3 mt-3">
@@ -155,7 +155,7 @@ export default function Scanner({ api, onPick }: { api: Api; onPick?: (symbol: s
           <button
             onClick={runScan}
             disabled={loading}
-            className="bg-accent hover:bg-blue-600 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-semibold transition"
+            className="bg-blue hover:bg-bluehi disabled:opacity-50 text-white px-5 py-2 rounded-full text-sm font-semibold transition"
           >
             {loading ? "Scanning…" : "Scan watchlist"}
           </button>
@@ -212,7 +212,7 @@ export default function Scanner({ api, onPick }: { api: Api; onPick?: (symbol: s
                 key={f}
                 onClick={() => setFilter(f)}
                 className={`px-3 py-1 rounded-md text-xs font-medium capitalize transition ${
-                  filter === f ? "bg-accent text-white" : "text-neutral hover:text-white"
+                  filter === f ? "bg-blue text-white" : "text-neutral hover:text-white"
                 }`}
               >
                 {f}
