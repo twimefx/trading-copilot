@@ -9,6 +9,12 @@ def test_health(client):
     body = r.json()
     assert body["status"] == "ok"
     assert "spend_today_usd" in body
+    assert body["auth"] == {
+        "enabled": False,
+        "issuer_configured": False,
+        "authorized_parties_configured": False,
+        "dev_header_fallback_enabled": False,
+    }
 
 
 def test_copilot_caches_and_avoids_second_llm_call(client, monkeypatch):

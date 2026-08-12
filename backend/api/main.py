@@ -151,12 +151,21 @@ def root():
 
 @app.get("/health")
 def health():
+    # Configuration posture only: do not expose issuers, URLs, keys, or user data.
+    # This makes a production auth rollout externally verifiable without leaking
+    # any Clerk credentials.
     return {
         "status": "ok",
         "service": "trading-copilot",
         "version": "0.4.0",
         "spend_today_usd": spend_guard.spent_today,
         "spend_cap_usd": spend_guard.cap,
+        "auth": {
+            "enabled": auth_mod.AUTH_ENABLED,
+            "issuer_configured": bool(auth_mod.CLERK_ISSUER),
+            "authorized_parties_configured": bool(auth_mod.CLERK_AUTHORIZED_PARTIES),
+            "dev_header_fallback_enabled": auth_mod.AUTH_DEV_ALLOW_HEADER,
+        },
     }
 
 

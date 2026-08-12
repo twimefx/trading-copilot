@@ -97,15 +97,22 @@ verifies the Clerk session JWT on every request and gates features/quotas by the
 user's tier. Everything is env-driven — no code change to go live.
 
 ### 3a. Clerk (auth)
-1. Create a Clerk application at dashboard.clerk.com. Enable Email + any social logins.
-2. Copy from Clerk → **API Keys**:
+1. Create or select a **production** Clerk application at dashboard.clerk.com. Do not reuse a development instance for `twimetrade.app`. Enable Email + any intended social logins.
+2. In the Clerk production instance, add `https://twimetrade.app` as an allowed origin/redirect URL. Keep any preview/development URLs in their appropriate non-production configuration.
+3. Copy from Clerk → **API Keys**:
    - Publishable key (`pk_live_***`) → Vercel env `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
    - Secret key (`sk_live_***`) → Vercel env `CLERK_SECRET_KEY`
-3. From Clerk → **API Keys → Show JWKS URL** (Frontend API), set on **Railway**:
+4. From Clerk → **API Keys → Show JWKS URL** (Frontend API), set on **Railway**:
    - `CLERK_JWKS_URL` = `https://<slug>.clerk.accounts.dev/.well-known/jwks.json`
    - `CLERK_ISSUER`   = `https://<slug>.clerk.accounts.dev`
-   - `CLERK_AUTHORIZED_PARTIES` (optional) = your Vercel + custom domains, comma-separated
-4. Leave `AUTH_DEV_ALLOW_HEADER` unset in prod (the legacy `X-Owner-Id` fallback is dev-only).
+   - `CLERK_AUTHORIZED_PARTIES` = `https://twimetrade.app` (add the production Vercel alias only if it is intentionally public)
+   - `AUTH_DEV_ALLOW_HEADER` = `0`
+5. Vercel environment variables are build-time configuration. Set both Vercel values for the **Production** environment, then redeploy the frontend. Setting the Railway values triggers a backend redeploy.
+6. Never paste Clerk keys, JWTs, cookies, or network-request headers into chat, terminal history, Git, or this repository. Type credential values directly in the provider dashboards.
+
+After both deployments, `GET /health` reports only a safe auth configuration posture:
+`auth.enabled`, `auth.issuer_configured`, `auth.authorized_parties_configured`, and
+`auth.dev_header_fallback_enabled`. It intentionally never returns credential values.
 
 ### 3b. Stripe (billing)
 1. In Stripe → **Products**, create two recurring prices: Pro ($49/mo) and Premium ($199/mo).
