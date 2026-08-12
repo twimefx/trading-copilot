@@ -1,5 +1,5 @@
 """Tests for data provider routing (no network)."""
-from backend.data import binance, oanda
+from backend.data import binance, oanda, yahoo
 from backend.data.providers import asset_class, get_provider
 
 
@@ -19,6 +19,13 @@ def test_forex_detection():
 def test_provider_routing():
     assert get_provider("BTCUSDT") is binance
     assert get_provider("EUR_USD") is oanda
+
+
+def test_us_equity_detection_and_routing():
+    """US equity tickers take the traceable Yahoo adapter, not crypto by default."""
+    assert asset_class("NVDA") == "equity"
+    assert asset_class("AAPL") == "equity"
+    assert get_provider("NVDA") is yahoo
 
 
 def test_oanda_instrument_normalization():

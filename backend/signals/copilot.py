@@ -14,6 +14,7 @@ import re
 from backend.ai.router import AIRouter, TaskClass
 from backend.signals import history as signal_history
 from backend.signals.context import MarketContext, build_market_context
+from backend.signals.kronos_consensus import score_context
 
 DISCLAIMER = (
     "This is AI-generated market analysis, not financial advice. "
@@ -178,6 +179,12 @@ def analyze(ctx: MarketContext, router: AIRouter | None = None) -> dict:
         result["entry_price"] = last_close
     # Range is authoritative/deterministic — never trust an LLM-invented band.
     result["range_24h"] = _compute_range(ctx)
+    # KRONOS is deterministic: the LLM explains verified context but cannot invent
+    # component scores, consensus labels, or their source metadata.
+    result["kronos_consensus"] = score_context(ctx)
+    result["data_provenance"] = ctx.provenance
+    result["fundamentals"] = ctx.fundamentals
+    result["news"] = ctx.news
     # Strip any leaked mid-sentence self-corrections from free-text fields.
     _clean_result(result)
     return result

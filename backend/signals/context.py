@@ -26,6 +26,9 @@ class MarketContext:
     open_interest: dict = field(default_factory=dict)
     kronos_range: dict | None = None
     structure: dict = field(default_factory=dict)
+    fundamentals: dict = field(default_factory=dict)
+    news: dict = field(default_factory=dict)
+    provenance: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -47,6 +50,19 @@ def build_market_context(
     """
     provider = get_provider(symbol)
     df = provider.fetch_klines(symbol, interval, candles)
+    fundamentals_fn = getattr(provider, "fetch_fundamentals", None)
+    news_fn = getattr(provider, "fetch_news", None)
+    provenance_fn = getattr(provider, "provenance", None)
+    fundamentals = fundamentals_fn(symbol) if callable(fundamentals_fn) else {
+        "available": False, "note": "fundamentals unavailable from this provider"
+    }
+    news = news_fn(symbol) if callable(news_fn) else {
+        "available": False, "note": "news unavailable from this provider"
+    }
+    provenance = provenance_fn(symbol, interval) if callable(provenance_fn) else {
+        "provider": provider.__name__, "symbol": symbol, "interval": interval,
+        "freshness": "provider response time",
+    }
     ctx = MarketContext(
         symbol=symbol,
         interval=interval,
@@ -55,6 +71,9 @@ def build_market_context(
         funding=provider.fetch_funding_rate(symbol),
         open_interest=provider.fetch_open_interest(symbol),
         structure=price_structure(df),
+        fundamentals=fundamentals,
+        news=news,
+        provenance=provenance,
     )
     if include_kronos:
         ctx.kronos_range = _fetch_kronos_range(df)

@@ -31,11 +31,23 @@ type Analysis = {
   disclaimer?: string;
   cost_usd?: number;
   track_record?: string | null;
+  data_provenance?: { provider?: string; freshness?: string };
+  fundamentals?: { available?: boolean; exchange?: string; currency?: string; market_state?: string; regular_market_price?: number; note?: string };
+  news?: { available?: boolean; note?: string };
+  kronos_consensus?: {
+    signal: string;
+    overall_score: number;
+    consensus_confidence: number;
+    model_probability: number | null;
+    confidence_note: string;
+    components: Array<{ component_type: string; score: number; confidence: number; weight: number; evidence: string[] }>;
+  };
   raw?: string;
 };
 
 const CRYPTO_PRESETS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
 const FOREX_PRESETS = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "XAU_USD"];
+const EQUITY_PRESETS = ["NVDA", "AAPL", "MSFT", "AMD"];
 
 function leanColor(lean?: string) {
   if (lean === "bullish") return "text-bull";
@@ -349,13 +361,35 @@ export default function Home() {
               </button>
             </span>
           ))}
+          <span className="w-px bg-white/10 mx-1" />
+          {EQUITY_PRESETS.map((p) => (
+            <span key={p} className="relative inline-flex">
+              <button
+                onClick={() => { setSymbol(p); setIntervalVal("1d"); }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                  symbol === p ? "bg-blue text-white" : "bg-panelhi text-neutral hover:text-white"
+                }`}
+              >
+                {p}
+              </button>
+              <button
+                onClick={() => toggleWatch(p)}
+                title={watchlist.includes(p) ? "Remove from watchlist" : "Save to watchlist"}
+                className={`absolute -top-1.5 -right-1.5 text-[10px] w-4 h-4 rounded-full leading-none ${
+                  watchlist.includes(p) ? "text-accent" : "text-neutral/50 hover:text-accent"
+                }`}
+              >
+                {watchlist.includes(p) ? "★" : "☆"}
+              </button>
+            </span>
+          ))}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <input
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
             className="bg-panelhi rounded-lg px-3 py-2 text-sm flex-1 min-w-[140px] outline-none focus:ring-1 ring-blue"
-            placeholder="Symbol e.g. BTCUSDT"
+            placeholder="Symbol e.g. NVDA or BTCUSDT"
           />
           <button
             onClick={() => toggleWatch(symbol)}
@@ -473,8 +507,62 @@ export default function Home() {
                 on={result.range_24h?.source === "Kronos"}
                 hint={result.range_24h?.source === "Kronos" ? undefined : "using ATR estimate"}
               />
+              {result.data_provenance?.provider && <Coverage label={result.data_provenance.provider} on />}
             </div>
           </div>
+
+          {result.kronos_consensus && (
+            <div className="bg-panel rounded-2xl border border-accent/20 p-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-accent font-semibold text-sm">KRONOS CONSENSUS</h3>
+                  <div className="mt-1 text-2xl font-bold text-ink">{result.kronos_consensus.signal}</div>
+                  <p className="mt-1 text-xs text-neutral">Deterministic multi-input consensus — not a trade instruction.</p>
+                </div>
+                <div className="grid grid-cols-3 gap-5 text-right">
+                  <Metric label="SCORE" value={result.kronos_consensus.overall_score.toFixed(0)} />
+                  <Metric label="CONFIDENCE" value={`${result.kronos_consensus.consensus_confidence.toFixed(0)}%`} />
+                  <Metric label="MODEL PROB." value={result.kronos_consensus.model_probability == null ? "—" : `${result.kronos_consensus.model_probability.toFixed(0)}%`} />
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {result.kronos_consensus.components.filter((c) => c.weight > 0).map((component) => (
+                  <div key={component.component_type} className="border border-white/5 bg-black/10 p-3 rounded-lg">
+                    <div className="flex justify-between gap-2 text-xs uppercase tracking-wide text-neutral">
+                      <span>{component.component_type}</span><span>{component.score.toFixed(0)}</span>
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-gray-300">{component.evidence[0]}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] text-neutral/70">{result.kronos_consensus.confidence_note}</p>
+            </div>
+          )}
+
+          {(result.data_provenance || result.fundamentals?.available || result.news) && (
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="bg-panel rounded-2xl border border-white/5 p-5">
+                <h3 className="text-neutral font-semibold text-sm">DATA PROVENANCE</h3>
+                <dl className="mt-3 grid grid-cols-2 gap-y-2 text-xs">
+                  <dt className="text-neutral/60">Provider</dt><dd className="text-right text-gray-300">{result.data_provenance?.provider ?? "—"}</dd>
+                  <dt className="text-neutral/60">Freshness</dt><dd className="text-right text-gray-300">{result.data_provenance?.freshness ?? "—"}</dd>
+                  <dt className="text-neutral/60">Fundamentals</dt><dd className="text-right text-gray-300">{result.fundamentals?.available ? "Verified metadata only" : (result.fundamentals?.note ?? "Unavailable")}</dd>
+                  <dt className="text-neutral/60">News</dt><dd className="text-right text-gray-300">{result.news?.available ? "Available" : (result.news?.note ?? "Unavailable")}</dd>
+                </dl>
+              </div>
+              {result.fundamentals?.available && (
+                <div className="bg-panel rounded-2xl border border-white/5 p-5">
+                  <h3 className="text-neutral font-semibold text-sm">EQUITY METADATA</h3>
+                  <dl className="mt-3 grid grid-cols-2 gap-y-2 text-xs">
+                    <dt className="text-neutral/60">Exchange</dt><dd className="text-right text-gray-300">{result.fundamentals.exchange ?? "—"}</dd>
+                    <dt className="text-neutral/60">Currency</dt><dd className="text-right text-gray-300">{result.fundamentals.currency ?? "—"}</dd>
+                    <dt className="text-neutral/60">Market state</dt><dd className="text-right text-gray-300">{result.fundamentals.market_state ?? "—"}</dd>
+                    <dt className="text-neutral/60">Provider quote</dt><dd className="text-right text-gray-300">{fmtPrice(result.fundamentals.regular_market_price)}</dd>
+                  </dl>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Drivers + Risks */}
           <div className="grid md:grid-cols-2 gap-4">
@@ -609,4 +697,8 @@ function Coverage({ label, on, hint }: { label: string; on: boolean; hint?: stri
       {!on && hint && <span className="text-neutral/40">· {hint}</span>}
     </span>
   );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div><div className="text-[10px] text-neutral">{label}</div><div className="font-mono text-sm text-ink">{value}</div></div>;
 }

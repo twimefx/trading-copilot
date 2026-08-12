@@ -2,17 +2,21 @@
 
 Crypto (USDT/USDC/BTC pairs) -> Binance (free public API)
 Forex  (6-letter FX or EUR_USD form) -> Oanda (requires OANDA_API_TOKEN)
+Equity (plain US ticker)     -> Yahoo Finance chart API (traceable MVP adapter)
 
 Each provider exposes the same interface: fetch_klines, fetch_funding_rate,
 fetch_open_interest. So MarketContext stays provider-agnostic.
 """
 from __future__ import annotations
 
-from backend.data import binance, oanda
+import re
+
+from backend.data import binance, oanda, yahoo
 
 _CRYPTO_QUOTES = ("USDT", "USDC", "BUSD", "BTC", "ETH")
 # Common FX + metals quote/base codes for detection.
 _FX_CODES = {"EUR", "USD", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "XAU", "XAG"}
+_US_EQUITY_TICKER = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 
 
 def asset_class(symbol: str) -> str:
@@ -23,9 +27,16 @@ def asset_class(symbol: str) -> str:
     cleaned = s.replace("_", "").replace("/", "").replace("-", "")
     if len(cleaned) == 6 and cleaned[:3] in _FX_CODES and cleaned[3:] in _FX_CODES:
         return "forex"
+    if _US_EQUITY_TICKER.fullmatch(s):
+        return "equity"
     return "crypto"  # default
 
 
 def get_provider(symbol: str):
     """Return the data module appropriate for this symbol."""
-    return oanda if asset_class(symbol) == "forex" else binance
+    kind = asset_class(symbol)
+    if kind == "forex":
+        return oanda
+    if kind == "equity":
+        return yahoo
+    return binance

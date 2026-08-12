@@ -12,6 +12,7 @@ const TV_INTERVAL: Record<string, string> = {
 
 // Maps a Binance-style symbol to a TradingView symbol.
 // Crypto USDT pairs -> BINANCE:<sym>. Forex (EUR_USD / EURUSD) -> OANDA:EURUSD.
+// Plain US-equity tickers (for example NVDA) -> NASDAQ:<ticker>.
 function toTvSymbol(symbol: string): string {
   const s = symbol.toUpperCase();
   if (s.endsWith("USDT") || s.endsWith("USDC") || s.endsWith("BTC")) {
@@ -22,7 +23,7 @@ function toTvSymbol(symbol: string): string {
   if (cleaned.length === 6) {
     return `OANDA:${cleaned}`;
   }
-  return s;
+  return `NASDAQ:${s}`;
 }
 
 function TradingViewChart({ symbol, interval }: { symbol: string; interval: string }) {
