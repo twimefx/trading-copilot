@@ -35,12 +35,21 @@ def normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper().replace("/", "-")
 
 
-def _chart(symbol: str, interval: str) -> dict:
+def _chart(symbol: str, interval: str, *, start_s: int | None = None,
+           end_s: int | None = None) -> dict:
     normalized = normalize_symbol(symbol)
     provider_interval = _INTERVALS.get(interval)
     if provider_interval is None:
         raise ValueError(f"Unsupported equity interval '{interval}'.")
-    query = urllib.parse.urlencode({"interval": provider_interval, "range": _RANGES[interval]})
+    params: dict[str, str | int] = {"interval": provider_interval}
+    if start_s is None or end_s is None:
+        params["range"] = _RANGES[interval]
+    else:
+        # The chart endpoint's period bounds are epoch seconds. Keeping this
+        # server-side avoids look-ahead in replay and signal outcome scoring.
+        params["period1"] = int(start_s)
+        params["period2"] = int(end_s)
+    query = urllib.parse.urlencode(params)
     url = f"{_CHART_BASE}/{urllib.parse.quote(normalized, safe='.-')}?{query}"
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AI-Market-Copilot/0.5)"})
     try:
@@ -57,9 +66,8 @@ def _chart(symbol: str, interval: str) -> dict:
     return chart["result"][0]
 
 
-def fetch_klines(symbol: str = "NVDA", interval: str = "1d", limit: int = 500) -> pd.DataFrame:
-    """Fetch equity OHLCV and normalize it to the project-wide candle schema."""
-    result = _chart(symbol, interval)
+def _frame_from_chart(result: dict, symbol: str) -> pd.DataFrame:
+    """Normalize a chart result to canonical, monotonic OHLCV candles."""
     quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
     timestamps = result.get("timestamp") or []
     rows = []
@@ -72,14 +80,41 @@ def fetch_klines(symbol: str = "NVDA", interval: str = "1d", limit: int = 500) -
         close_float = float(close)
         volume_float = float(volume)
         rows.append({
-            "timestamps": pd.to_datetime(timestamp, unit="s", utc=True),
+            # Match the established provider contract: UTC represented as a
+            # timezone-naive timestamp, compatible with replay's timestamp cuts.
+            "timestamps": pd.to_datetime(timestamp, unit="s", utc=True).tz_localize(None),
             "open": float(opening), "high": float(high), "low": float(low),
-            "close": close_float, "volume": volume_float, "amount": close_float * volume_float,
+            "close": close_float, "volume": volume_float,
+            # Derived notional proxy; Yahoo chart does not return quote volume.
+            "amount": close_float * volume_float,
         })
     frame = pd.DataFrame(rows, columns=["timestamps", "open", "high", "low", "close", "volume", "amount"])
     if frame.empty:
         raise UnknownSymbolError(symbol, "Yahoo Finance")
-    return frame.tail(limit).reset_index(drop=True)
+    return frame.drop_duplicates(subset="timestamps").sort_values("timestamps").reset_index(drop=True)
+
+
+def fetch_klines(symbol: str = "NVDA", interval: str = "1d", limit: int = 500) -> pd.DataFrame:
+    """Fetch equity OHLCV and normalize it to the project-wide candle schema."""
+    result = _chart(symbol, interval)
+    return _frame_from_chart(result, symbol).tail(limit).reset_index(drop=True)
+
+
+def fetch_klines_range(symbol: str, interval: str, start_ms: int,
+                       end_ms: int) -> pd.DataFrame:
+    """Fetch canonical historical candles inside a bounded replay window.
+
+    `period2` is exclusive at the provider boundary; post-filtering makes the
+    public contract explicit and prevents a provider-side inclusive edge from
+    leaking a future candle into replay context.
+    """
+    if end_ms <= start_ms:
+        raise ValueError("end_ms must be greater than start_ms")
+    result = _chart(symbol, interval, start_s=start_ms // 1000, end_s=end_ms // 1000)
+    frame = _frame_from_chart(result, symbol)
+    start = pd.to_datetime(start_ms, unit="ms")
+    end = pd.to_datetime(end_ms, unit="ms")
+    return frame[(frame["timestamps"] >= start) & (frame["timestamps"] <= end)].reset_index(drop=True)
 
 
 def fetch_funding_rate(_symbol: str = "NVDA") -> dict:

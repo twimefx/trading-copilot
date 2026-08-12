@@ -6,7 +6,6 @@ regime, and risk observations. It never asks an LLM to create market values or s
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from backend.signals.context import MarketContext
@@ -31,7 +30,8 @@ def _direction(score: float, deadband: float = 5.0) -> str:
     return "neutral"
 
 
-def _component(component_type: str, score: float, confidence: float, evidence: list[str], source: str) -> dict[str, Any]:
+def _component(component_type: str, score: float, confidence: float, evidence: list[str], source: str,
+               as_of: str | None = None) -> dict[str, Any]:
     bounded_score = round(max(0.0, min(100.0, score)), 1)
     return {
         "component_type": component_type,
@@ -40,11 +40,11 @@ def _component(component_type: str, score: float, confidence: float, evidence: l
         "confidence": round(max(0.0, min(100.0, confidence)), 1),
         "evidence": evidence,
         "source": source,
-        "timestamp": datetime.now(UTC).isoformat(),
+        "as_of": as_of,
     }
 
 
-def _technical(context: MarketContext) -> dict[str, Any]:
+def _technical(context: MarketContext, as_of: str | None = None) -> dict[str, Any]:
     ind = context.indicators or {}
     price = ind.get("last_close")
     score = 50.0
@@ -83,10 +83,10 @@ def _technical(context: MarketContext) -> dict[str, Any]:
 
     if not evidence:
         evidence.append("Technical inputs are unavailable.")
-    return _component("technical", score, min(95, observations * 18), evidence, "technical indicators")
+    return _component("technical", score, min(95, observations * 18), evidence, "technical indicators", as_of)
 
 
-def _quant(context: MarketContext) -> dict[str, Any]:
+def _quant(context: MarketContext, as_of: str | None = None) -> dict[str, Any]:
     ind = context.indicators or {}
     score = 50.0
     evidence: list[str] = []
@@ -119,10 +119,10 @@ def _quant(context: MarketContext) -> dict[str, Any]:
 
     if not evidence:
         evidence.append("Quant factor inputs are unavailable.")
-    return _component("quant", score, min(85, observations * 30), evidence, "deterministic factor model")
+    return _component("quant", score, min(85, observations * 30), evidence, "deterministic factor model", as_of)
 
 
-def _regime(context: MarketContext) -> dict[str, Any]:
+def _regime(context: MarketContext, as_of: str | None = None) -> dict[str, Any]:
     structure = (context.structure or {}).get("structure", "")
     atr_pct = (context.indicators or {}).get("atr_pct")
     score = 50.0
@@ -148,10 +148,10 @@ def _regime(context: MarketContext) -> dict[str, Any]:
         else:
             evidence.append(f"ATR is {atr_pct:g}% of price.")
 
-    return _component("regime", score, min(80, 35 + observations * 25), evidence, "market regime service")
+    return _component("regime", score, min(80, 35 + observations * 25), evidence, "market regime service", as_of)
 
 
-def _risk(context: MarketContext) -> dict[str, Any]:
+def _risk(context: MarketContext, as_of: str | None = None) -> dict[str, Any]:
     ind = context.indicators or {}
     atr_pct = ind.get("atr_pct")
     rsi = ind.get("rsi_14")
@@ -178,11 +178,11 @@ def _risk(context: MarketContext) -> dict[str, Any]:
 
     if not evidence:
         evidence.append("Risk inputs are incomplete; confidence is reduced.")
-    return _component("risk", score, min(85, 30 + observations * 25), evidence, "risk analytics")
+    return _component("risk", score, min(85, 30 + observations * 25), evidence, "risk analytics", as_of)
 
 
-def _missing(component_type: str, note: str) -> dict[str, Any]:
-    return _component(component_type, 50, 0, [note], "not configured")
+def _missing(component_type: str, note: str, as_of: str | None = None) -> dict[str, Any]:
+    return _component(component_type, 50, 0, [note], "not configured", as_of)
 
 
 def _signal(score: float, confidence: float) -> str:
@@ -206,10 +206,11 @@ def _signal(score: float, confidence: float) -> str:
 def score_context(context: MarketContext, weights: dict[str, float] | None = None) -> dict[str, Any]:
     """Return a deterministic, explainable KRONOS consensus for one MarketContext."""
     effective_weights = {**_DEFAULT_WEIGHTS, **(weights or {})}
+    as_of = (context.provenance or {}).get("as_of")
     components = [
-        _technical(context), _quant(context), _missing("fundamental", "Fundamental provider is not configured for this slice."),
-        _missing("macro", "Macro provider is not configured for this slice."),
-        _missing("sentiment", "News/sentiment provider is not configured for this slice."), _regime(context), _risk(context),
+        _technical(context, as_of), _quant(context, as_of), _missing("fundamental", "Fundamental provider is not configured for this slice.", as_of),
+        _missing("macro", "Macro provider is not configured for this slice.", as_of),
+        _missing("sentiment", "News/sentiment provider is not configured for this slice.", as_of), _regime(context, as_of), _risk(context, as_of),
     ]
     weighted = [(component, effective_weights.get(component["component_type"], 0.0)) for component in components]
     active = [(component, weight) for component, weight in weighted if weight > 0 and component["confidence"] > 0]
@@ -230,5 +231,5 @@ def score_context(context: MarketContext, weights: dict[str, float] | None = Non
         "model_probability": model_probability,
         "confidence_note": "Consensus confidence measures evidence coverage and agreement; it is not a calibrated probability of profit.",
         "components": [{**component, "weight": effective_weights.get(component["component_type"], 0.0)} for component in components],
-        "timestamp": datetime.now(UTC).isoformat(),
+        "as_of": as_of,
     }

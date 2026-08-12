@@ -26,6 +26,67 @@ const useAuthImpl = CLERK_ENABLED ? useAuth : useNoAuth;
 
 export type Range = { low: number | null; high: number | null; source: string | null };
 
+export type DataProvenance = {
+  provider?: string;
+  symbol?: string;
+  interval?: string;
+  as_of?: string;
+  retrieved_at?: string;
+  status?: "live" | "delayed" | "historical" | "provider_timestamp_only" | string;
+  // Kept for responses generated before the explicit lineage contract landed.
+  freshness?: string;
+};
+
+export type Availability = {
+  available?: boolean;
+  note?: string;
+};
+
+export type EquityMetadata = Availability & {
+  exchange?: string;
+  currency?: string;
+  market_state?: string;
+  regular_market_price?: number;
+};
+
+export type KronosConsensusComponent = {
+  component_type: string;
+  score: number;
+  confidence: number;
+  weight: number;
+  evidence: string[];
+  source?: string;
+  as_of?: string | null;
+};
+
+export type KronosConsensus = {
+  signal: string;
+  overall_score: number;
+  consensus_confidence: number;
+  model_probability: number | null;
+  confidence_note: string;
+  as_of?: string | null;
+  components: KronosConsensusComponent[];
+};
+
+export type CopilotAnalysis = {
+  lean?: string;
+  conviction?: number;
+  summary?: string;
+  drivers?: string[];
+  risks?: string[];
+  range_24h?: Range;
+  suggested_invalidation?: string;
+  disclaimer?: string;
+  cost_usd?: number;
+  track_record?: string | null;
+  data_provenance?: DataProvenance;
+  fundamentals?: EquityMetadata;
+  news?: Availability;
+  kronos_consensus?: KronosConsensus;
+  raw?: string;
+};
+
 export type MeResponse = {
   user_id: string;
   tier: "free" | "pro" | "premium";
@@ -113,7 +174,7 @@ export function useApi() {
       isSignedIn,
       me: () => request<MeResponse>("/me"),
       copilot: (body: { symbol: string; interval: string; include_kronos: boolean }) =>
-        request("/copilot", { method: "POST", body: JSON.stringify(body) }),
+        request<CopilotAnalysis>("/copilot", { method: "POST", body: JSON.stringify(body) }),
       scan: (body: { symbols: string[]; interval: string }) =>
         request("/scan", { method: "POST", body: JSON.stringify(body) }),
       debate: (body: { symbol: string; interval: string; include_kronos?: boolean }) =>

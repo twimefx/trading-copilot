@@ -20,7 +20,7 @@ _US_EQUITY_TICKER = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 
 
 def asset_class(symbol: str) -> str:
-    s = symbol.upper()
+    s = symbol.strip().upper()
     if any(s.endswith(q) for q in _CRYPTO_QUOTES) and "_" not in s:
         return "crypto"
     # EUR_USD or EURUSD style

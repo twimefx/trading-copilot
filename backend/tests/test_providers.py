@@ -28,6 +28,12 @@ def test_us_equity_detection_and_routing():
     assert get_provider("NVDA") is yahoo
 
 
+def test_provider_routing_normalizes_whitespace_and_case():
+    """Direct backend callers receive the same routing as the API path."""
+    assert asset_class(" nvda ") == "equity"
+    assert get_provider(" nvda ") is yahoo
+
+
 def test_oanda_instrument_normalization():
     assert oanda.normalize_instrument("EURUSD") == "EUR_USD"
     assert oanda.normalize_instrument("eur-usd") == "EUR_USD"

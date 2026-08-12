@@ -58,7 +58,7 @@ Current adapters:
 | FX / metals | `backend/data/oanda.py` | Oanda v20 REST API; provider token required; no perp funding/OI. |
 | US equity | `backend/data/yahoo.py` | Yahoo Finance chart endpoint; normalized OHLCV plus source metadata. Funding/OI are explicitly unavailable. This is an MVP adapter and should be replaced or supplemented with a licensed provider before institutional-scale use. |
 
-All raw values presented to the user must include source/freshness metadata. Missing fundamentals/news are represented as unavailable; no inference is fabricated from a price feed.
+All raw values presented to the user must include source lineage. `MarketContext` records the provider, symbol, interval, analyzed-candle `as_of`, backend `retrieved_at`, and a conservative status; a provider timestamp alone is never presented as a claim of a live quote. Missing fundamentals/news are represented as unavailable; no inference is fabricated from a price feed.
 
 ## KRONOS consensus
 
@@ -70,7 +70,7 @@ All raw values presented to the user must include source/freshness metadata. Mis
 - Risk: ATR and extension risk.
 - Fundamental, macro, and sentiment are represented explicitly as unavailable until their verified provider adapters exist.
 
-The engine emits component score, direction, confidence, evidence, source, timestamp, configurable weight, overall signal, consensus confidence, and model probability.
+The engine emits component score, direction, confidence, evidence, source, source-derived `as_of`, configurable weight, overall signal, consensus confidence, and model probability. It does not embed wall-clock scoring timestamps, so identical `MarketContext` inputs produce identical consensus output.
 
 `consensus_confidence` measures evidence coverage/agreement. It is not a calibrated probability of profit. `model_probability` is kept separate and must not be interpreted as a return guarantee.
 

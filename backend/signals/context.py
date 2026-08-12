@@ -11,6 +11,7 @@ import json
 import os
 import urllib.request
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 
 from backend.data.providers import get_provider, asset_class
 from backend.data.indicators import snapshot, price_structure
@@ -48,28 +49,36 @@ def build_market_context(
     Provider (Binance/Oanda) is chosen automatically from the symbol.
     Kronos is optional (it's the slow CPU part) — callers can skip it for speed.
     """
-    provider = get_provider(symbol)
-    df = provider.fetch_klines(symbol, interval, candles)
+    normalized_symbol = symbol.strip().upper()
+    provider = get_provider(normalized_symbol)
+    df = provider.fetch_klines(normalized_symbol, interval, candles)
     fundamentals_fn = getattr(provider, "fetch_fundamentals", None)
     news_fn = getattr(provider, "fetch_news", None)
     provenance_fn = getattr(provider, "provenance", None)
-    fundamentals = fundamentals_fn(symbol) if callable(fundamentals_fn) else {
+    fundamentals = fundamentals_fn(normalized_symbol) if callable(fundamentals_fn) else {
         "available": False, "note": "fundamentals unavailable from this provider"
     }
-    news = news_fn(symbol) if callable(news_fn) else {
+    news = news_fn(normalized_symbol) if callable(news_fn) else {
         "available": False, "note": "news unavailable from this provider"
     }
-    provenance = provenance_fn(symbol, interval) if callable(provenance_fn) else {
-        "provider": provider.__name__, "symbol": symbol, "interval": interval,
-        "freshness": "provider response time",
+    provenance = provenance_fn(normalized_symbol, interval) if callable(provenance_fn) else {
+        "provider": provider.__name__, "symbol": normalized_symbol, "interval": interval,
     }
+    # This identifies the exact normalized candle observation analyzed below.
+    # It is intentionally not a claim that the market is currently live.
+    provenance = dict(provenance)
+    provenance["retrieved_at"] = datetime.now(UTC).isoformat()
+    if not df.empty:
+        last_timestamp = df["timestamps"].iloc[-1]
+        provenance["as_of"] = last_timestamp.isoformat() if hasattr(last_timestamp, "isoformat") else str(last_timestamp)
+    provenance.setdefault("status", "provider_timestamp_only")
     ctx = MarketContext(
-        symbol=symbol,
+        symbol=normalized_symbol,
         interval=interval,
-        asset_class=asset_class(symbol),
+        asset_class=asset_class(normalized_symbol),
         indicators=snapshot(df),
-        funding=provider.fetch_funding_rate(symbol),
-        open_interest=provider.fetch_open_interest(symbol),
+        funding=provider.fetch_funding_rate(normalized_symbol),
+        open_interest=provider.fetch_open_interest(normalized_symbol),
         structure=price_structure(df),
         fundamentals=fundamentals,
         news=news,

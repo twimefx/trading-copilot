@@ -13,37 +13,12 @@ import Alerts from "@/components/Alerts";
 import TrackRecord from "@/components/TrackRecord";
 import Replay from "@/components/Replay";
 import Admin from "@/components/Admin";
-import { useApi, MeResponse } from "@/lib/api";
+import { CopilotAnalysis, MeResponse, Range, useApi } from "@/lib/api";
 
 // When Clerk isn't configured the app runs anonymously (no sign-in UI, no tier
 // badge) — matching the backend's open mode. Flip on by setting the Clerk keys.
 const CLERK_ENABLED = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
 
-type Range = { low: number | null; high: number | null; source: string };
-type Analysis = {
-  lean?: string;
-  conviction?: number;
-  summary?: string;
-  drivers?: string[];
-  risks?: string[];
-  range_24h?: Range;
-  suggested_invalidation?: string;
-  disclaimer?: string;
-  cost_usd?: number;
-  track_record?: string | null;
-  data_provenance?: { provider?: string; freshness?: string };
-  fundamentals?: { available?: boolean; exchange?: string; currency?: string; market_state?: string; regular_market_price?: number; note?: string };
-  news?: { available?: boolean; note?: string };
-  kronos_consensus?: {
-    signal: string;
-    overall_score: number;
-    consensus_confidence: number;
-    model_probability: number | null;
-    confidence_note: string;
-    components: Array<{ component_type: string; score: number; confidence: number; weight: number; evidence: string[] }>;
-  };
-  raw?: string;
-};
 
 const CRYPTO_PRESETS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
 const FOREX_PRESETS = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "XAU_USD"];
@@ -87,7 +62,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [upgradePrompt, setUpgradePrompt] = useState(false);
-  const [result, setResult] = useState<Analysis | null>(null);
+  const [result, setResult] = useState<CopilotAnalysis | null>(null);
   const [view, setView] = useState<"copilot" | "scanner" | "journal" | "portfolio" | "debate" | "flow" | "strategy" | "alerts" | "track" | "replay" | "admin">("copilot");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [journalRefresh, setJournalRefresh] = useState(0);
@@ -152,7 +127,7 @@ export default function Home() {
     setSaveState("idle");
     try {
       const data = await api.copilot({ symbol, interval, include_kronos: useKronos });
-      setResult(data as Analysis);
+      setResult(data);
       refreshMe();
     } catch (e: any) {
       if (e?.status === 402) {
@@ -545,7 +520,9 @@ export default function Home() {
                 <h3 className="text-neutral font-semibold text-sm">DATA PROVENANCE</h3>
                 <dl className="mt-3 grid grid-cols-2 gap-y-2 text-xs">
                   <dt className="text-neutral/60">Provider</dt><dd className="text-right text-gray-300">{result.data_provenance?.provider ?? "—"}</dd>
-                  <dt className="text-neutral/60">Freshness</dt><dd className="text-right text-gray-300">{result.data_provenance?.freshness ?? "—"}</dd>
+                  <dt className="text-neutral/60">Data as of</dt><dd className="text-right text-gray-300">{result.data_provenance?.as_of ?? "Unavailable"}</dd>
+                  <dt className="text-neutral/60">Retrieved</dt><dd className="text-right text-gray-300">{result.data_provenance?.retrieved_at ?? "Unavailable"}</dd>
+                  <dt className="text-neutral/60">Status</dt><dd className="text-right text-gray-300">{result.data_provenance?.status ?? result.data_provenance?.freshness ?? "Not confirmed"}</dd>
                   <dt className="text-neutral/60">Fundamentals</dt><dd className="text-right text-gray-300">{result.fundamentals?.available ? "Verified metadata only" : (result.fundamentals?.note ?? "Unavailable")}</dd>
                   <dt className="text-neutral/60">News</dt><dd className="text-right text-gray-300">{result.news?.available ? "Available" : (result.news?.note ?? "Unavailable")}</dd>
                 </dl>

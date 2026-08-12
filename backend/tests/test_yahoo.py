@@ -49,3 +49,20 @@ def test_fetch_klines_normalizes_yahoo_chart_payload(monkeypatch):
 def test_equity_provider_marks_derivatives_data_unavailable():
     assert yahoo.fetch_funding_rate("NVDA") == {"available": False, "note": "n/a for equities"}
     assert yahoo.fetch_open_interest("NVDA") == {"available": False, "note": "n/a for equities"}
+
+
+def test_fetch_klines_range_uses_bounded_window_and_filters_future_candles(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def _urlopen(request, **_kwargs):
+        captured["url"] = request.full_url
+        return _Response(_chart_payload())
+
+    monkeypatch.setattr(yahoo.urllib.request, "urlopen", _urlopen)
+    frame = yahoo.fetch_klines_range("NVDA", "1d", 1704067200000, 1704153600000)
+
+    assert "period1=1704067200" in captured["url"]
+    assert "period2=1704153600" in captured["url"]
+    assert "range=" not in captured["url"]
+    assert list(frame["close"]) == [121.0, 122.0]
+    assert frame["timestamps"].is_monotonic_increasing
