@@ -6,12 +6,12 @@ fastapi~=0.138.0
 uvicorn[standard]~=0.49.0
 anthropic~=0.111.0
 pandas~=2.2.2
-numpy~=2.5.0
+numpy~=2.5.2
 pydantic~=2.13.4
 # Trade Journal persistence. Postgres in prod (durable, survives redeploys) via
 # DATABASE_URL; falls back to stdlib sqlite3 when DATABASE_URL is unset (local dev).
 # psycopg[binary] ships a prebuilt wheel — no system libpq/compiler needed.
-psycopg[binary]~=3.2.0
+psycopg[binary]~=3.2.13
 # Auth: verify Clerk session JWTs (RS256) against their JWKS. [crypto] pulls the
 # cryptography wheel needed for RSA signature verification.
 pyjwt[crypto]~=2.10.0
